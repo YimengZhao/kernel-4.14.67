@@ -809,6 +809,10 @@ void tcp_release_cb(struct sock *sk)
 {
 	unsigned long flags, nflags;
 
+	struct tcp_sock *tp = tcp_sk(sk);
+	if(test_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags))
+		tcp_tsq_handler(sk);
+
 	/* perform an atomic operation only if at least one flag is set */
 	do {
 		flags = sk->sk_tsq_flags;
@@ -846,17 +850,64 @@ void tcp_release_cb(struct sock *sk)
 }
 EXPORT_SYMBOL(tcp_release_cb);
 
+struct qbackoff_tasklet {
+         struct tasklet_struct   tasklet;
+         struct list_head        head;
+};
+static DEFINE_PER_CPU(struct qbackoff_tasklet, qbackoff_tasklet);
+ 
+static void qbackoff_tasklet_func(unsigned long data)
+{    
+        struct qbackoff_tasklet *qbackoff = (struct qbackoff_tasklet *)data;
+        LIST_HEAD(list);
+        unsigned long flags;
+        struct list_head *q, *n; 
+        struct tcp_sock *tp;
+        struct sock *sk;
+
+        local_irq_save(flags);
+        list_splice_init(&qbackoff->head, &list);
+        local_irq_restore(flags);
+
+        list_for_each_safe(q, n, &list){
+                tp = list_entry(q, struct tcp_sock, qbackoff_node);
+                list_del(&tp->qbackoff_node);
+
+                sk = (struct sock *)tp;
+                smp_mb__before_atomic();
+                clear_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags);
+
+                if(!sk->sk_lock.owned &&  
+                test_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags)){
+                        bh_lock_sock(sk);
+                        if(!sock_owned_by_user(sk)){
+                                clear_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags);
+                                tcp_tsq_handler(sk);
+                        }   
+                        bh_unlock_sock(sk);
+                }   
+                sk_free(sk);
+        }   
+}
+
+
 void __init tcp_tasklet_init(void)
 {
 	int i;
 
 	for_each_possible_cpu(i) {
 		struct tsq_tasklet *tsq = &per_cpu(tsq_tasklet, i);
-
+		struct qbackoff_tasklet *qbackoff = &per_cpu(qbackoff_tasklet, i);
+		
 		INIT_LIST_HEAD(&tsq->head);
 		tasklet_init(&tsq->tasklet,
 			     tcp_tasklet_func,
 			     (unsigned long)tsq);
+
+		INIT_LIST_HEAD(&qbackoff->head);
+		tasklet_init(&qbackoff->tasklet,
+			     qbackoff_tasklet_func,
+			     (unsigned long)qbackoff);
 	}
 }
 
@@ -911,6 +962,27 @@ void tcp_wfree(struct sk_buff *skb)
 out:
 	sk_free(sk);
 }
+
+
+enum hrtimer_restart tcp_qbackoff_kick(struct hrtimer *timer){
+        struct tcp_sock *tp = container_of(timer, struct tcp_sock, qbackoff_timer);
+        unsigned long flags;
+	bool empty;
+
+        if(test_and_clear_bit(QBACKOFF_STOP, &tp->qbackoff_flags) && !test_and_set_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags)){
+                struct qbackoff_tasklet *qbackoff;
+                
+                local_irq_save(flags);
+                qbackoff = this_cpu_ptr(&qbackoff_tasklet);
+                empty = list_empty(&qbackoff->head);
+                list_add(&tp->qbackoff_node, &qbackoff->head);
+                if(empty)
+                        tasklet_schedule(&qbackoff->tasklet);
+                local_irq_restore(flags);
+        }
+        return HRTIMER_NORESTART;
+}
+
 
 /* Note: Called under hard irq.
  * We can not call TCP stack right away.
@@ -976,6 +1048,19 @@ static void tcp_internal_pacing(struct sock *sk, const struct sk_buff *skb)
 	hrtimer_start(&tcp_sk(sk)->pacing_timer,
 		      ktime_add_ns(ktime_get(), len_ns),
 		      HRTIMER_MODE_ABS_PINNED);
+}
+
+void tcp_qbackoff_reset_timer(struct sock *sk)
+{
+	/*if(sk->qbackoff_expire == 0){
+		sk->qbackoff_expire = 100;
+	}
+	else{
+		sk->qbackoff_expire *= 2;
+	}*/
+
+	sk->qbackoff_expire = 10;
+	hrtimer_start(&tcp_sk(sk)->qbackoff_timer, ns_to_ktime(sk->qbackoff_expire), HRTIMER_MODE_ABS_PINNED);
 }
 
 /* This routine actually transmits TCP packets queued in by
@@ -1128,15 +1213,36 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 			       sizeof(struct inet6_skb_parm)));
 
 	err = icsk->icsk_af_ops->queue_xmit(sk, skb, &inet->cork.fl);
-
-	if (unlikely(err > 0)) {
+		
+	/*if (unlikely(err > 0)) {
 		tcp_enter_cwr(sk);
 		err = net_xmit_eval(err);
 	}
 	if (!err && oskb) {
 		oskb->skb_mstamp = tp->tcp_mstamp;
 		tcp_rate_skb_sent(sk, oskb);
+	}*/
+
+
+	//check if tcp needs to backoff because qdisc is full
+	if(err == 0x03){
+		tcp_qbackoff_reset_timer(sk);
 	}
+	else{
+		hrtimer_cancel(&tcp_sk(sk)->qbackoff_timer);
+		sk->qbackoff_expire = 0;
+
+		if (unlikely(err > 0)) {
+			tcp_enter_cwr(sk);
+			err = net_xmit_eval(err);
+		}
+		if (!err && oskb) {
+			oskb->skb_mstamp = tp->tcp_mstamp;
+			tcp_rate_skb_sent(sk, oskb);
+		}
+
+	}
+
 	return err;
 }
 
@@ -2346,10 +2452,14 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 
 		if (test_bit(TCP_TSQ_DEFERRED, &sk->sk_tsq_flags))
 			clear_bit(TCP_TSQ_DEFERRED, &sk->sk_tsq_flags);
-		if (tcp_small_queue_check(sk, skb, 0))
+		/*if (tcp_small_queue_check(sk, skb, 0))
 			break;
 
 		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
+			break;*/
+		if(test_bit(QBACKOFF_STOP, &tcp_sk(sk)->qbackoff_flags))
+			break;
+		if(tcp_transmit_skb(sk, skb, 1, gfp))
 			break;
 
 repair:

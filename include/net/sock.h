@@ -477,6 +477,8 @@ struct sock {
 	void                    (*sk_destruct)(struct sock *sk);
 	struct sock_reuseport __rcu	*sk_reuseport_cb;
 	struct rcu_head		sk_rcu;
+
+	u32 qbackoff_expire;
 };
 
 enum sk_pacing {
