@@ -3180,6 +3180,13 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 		spin_lock(&q->busylock);
 
 	spin_lock(root_lock);
+
+	if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
+		kfree_skb(skb);	/* zym: need to logically free this skb for match qdisc drop workflow */
+		spin_unlock(root_lock);
+		return NET_XMIT_BACKOFF;
+	}
+
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
 		__qdisc_drop(skb, &to_free);
 		rc = NET_XMIT_DROP;

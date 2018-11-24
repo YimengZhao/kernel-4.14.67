@@ -1128,12 +1128,14 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 			       sizeof(struct inet6_skb_parm)));
 
 	err = icsk->icsk_af_ops->queue_xmit(sk, skb, &inet->cork.fl);
-
-	if (unlikely(err > 0)) {
+	
+	/* zym: keep logic intact */
+	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
 		tcp_enter_cwr(sk);
 		err = net_xmit_eval(err);
 	}
-	if (!err && oskb) {
+	/* zym: keep logic intact */
+	if ((!err || err == NET_XMIT_BACKOFF) && oskb) {  
 		oskb->skb_mstamp = tp->tcp_mstamp;
 		tcp_rate_skb_sent(sk, oskb);
 	}
