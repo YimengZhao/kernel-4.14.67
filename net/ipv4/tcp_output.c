@@ -846,6 +846,7 @@ void tcp_release_cb(struct sock *sk)
 }
 EXPORT_SYMBOL(tcp_release_cb);
 
+
 void __init tcp_tasklet_init(void)
 {
 	int i;
@@ -912,6 +913,16 @@ out:
 	sk_free(sk);
 }
 
+/* zym: similar to tcp_pace_kick */
+enum hrtimer_restart tcp_qbackoff_kick(struct hrtimer *timer){
+    struct tcp_sock *tp = container_of(timer, struct tcp_sock, qbackoff_timer);
+    unsigned long flags;
+    bool empty;
+
+    test_and_clear_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+    return HRTIMER_NORESTART;
+}
+
 /* Note: Called under hard irq.
  * We can not call TCP stack right away.
  */
@@ -976,6 +987,13 @@ static void tcp_internal_pacing(struct sock *sk, const struct sk_buff *skb)
 	hrtimer_start(&tcp_sk(sk)->pacing_timer,
 		      ktime_add_ns(ktime_get(), len_ns),
 		      HRTIMER_MODE_ABS_PINNED);
+}
+
+/* zym : reset qbackoff timer */
+void tcp_qbackoff_reset_timer(struct sock *sk)
+{
+    sk->qbackoff_expire = 5 * 1E4L;
+    hrtimer_start(&tcp_sk(sk)->qbackoff_timer, ktime_add_ns(ktime_get(), sk->qbackoff_expire), HRTIMER_MODE_ABS_PINNED);
 }
 
 /* This routine actually transmits TCP packets queued in by
@@ -1130,13 +1148,19 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	err = icsk->icsk_af_ops->queue_xmit(sk, skb, &inet->cork.fl);
 	
 	/* zym: keep logic intact */
+    tcp_qbackoff_reset_timer(sk);
+    set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
     if(err == NET_XMIT_BACKOFF){
         refcount_sub_and_test(skb->truesize, &sk->sk_wmem_alloc);
-
+        //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+        //tcp_qbackoff_reset_timer(sk);
     }
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
 		tcp_enter_cwr(sk);
 		err = net_xmit_eval(err);
+
+        /* zym: stop qbackoff timer */
+        //hrtimer_cancel(&tcp_sk(sk)->qbackoff_timer);
 	}
 	/* zym: keep logic intact */
 	if ((!err || err == NET_XMIT_BACKOFF) && oskb) {  
@@ -2189,7 +2213,8 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 				  unsigned int factor)
 {
 	unsigned int limit;
-	return false;
+	return false;    /* zym: disable tsq. */ 
+
 	limit = max(2 * skb->truesize, sk->sk_pacing_rate >> 10);
 	limit = min_t(u32, limit, sysctl_tcp_limit_output_bytes);
 	limit <<= factor;
@@ -2355,7 +2380,11 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		if (tcp_small_queue_check(sk, skb, 0))
 			break;
 
-		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
+		/* zym : break if needs to back off */
+        if (test_bit(QBACKOFF_STOP, &tcp_sk(sk)->qbackoff_flags))
+            break;
+
+        if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
 			break;
 
 repair:

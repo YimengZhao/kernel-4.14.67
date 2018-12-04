@@ -581,6 +581,7 @@ void tcp_init_xmit_timers(struct sock *);
 static inline void tcp_clear_xmit_timers(struct sock *sk)
 {
 	hrtimer_cancel(&tcp_sk(sk)->pacing_timer);
+    hrtimer_cancel(&tcp_sk(sk)->qbackoff_timer); /* zym : cancel qbackoff timer*/
 	inet_csk_clear_xmit_timers(sk);
 }
 
@@ -2037,6 +2038,7 @@ static inline void tcp_listendrop(const struct sock *sk)
 }
 
 enum hrtimer_restart tcp_pace_kick(struct hrtimer *timer);
+enum hrtimer_restart tcp_qbackoff_kick(struct hrtimer *timer); /* zym */
 
 /*
  * Interface for adding Upper Level Protocols over TCP
