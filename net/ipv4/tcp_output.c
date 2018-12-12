@@ -809,6 +809,11 @@ void tcp_release_cb(struct sock *sk)
 {
 	unsigned long flags, nflags;
 
+    /* zym: deferred from qbackoff_tasklet_func */
+    struct tcp_sock *tp = tcp_sk(sk);
+    if(test_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags))
+        tcp_tsq_handler(sk);
+
 	/* perform an atomic operation only if at least one flag is set */
 	do {
 		flags = sk->sk_tsq_flags;
@@ -846,6 +851,45 @@ void tcp_release_cb(struct sock *sk)
 }
 EXPORT_SYMBOL(tcp_release_cb);
 
+/* zym: similar to tsq_tasklet */
+struct qbackoff_tasklet {
+    struct tasklet_struct   tasklet;
+    struct list_head        head;
+};
+static DEFINE_PER_CPU(struct qbackoff_tasklet, qbackoff_tasklet);
+
+/* zym : similar to tsq_tasklet_func */
+static void qbackoff_tasklet_func(unsigned long data)
+{
+    struct qbackoff_tasklet *qbackoff = (struct qbackoff_tasklet *)data;
+    LIST_HEAD(list);
+    unsigned long flags;
+    struct list_head *q, *n; 
+    struct tcp_sock *tp;
+    struct sock *sk;
+
+    local_irq_save(flags);
+    list_splice_init(&qbackoff->head, &list);
+    local_irq_restore(flags);
+
+    list_for_each_safe(q, n, &list){
+        tp = list_entry(q, struct tcp_sock, qbackoff_node);
+        list_del(&tp->qbackoff_node);
+
+        sk = (struct sock *)tp;
+        bh_lock_sock(sk);
+
+        if (!sock_owned_by_user(sk)) {
+            tcp_tsq_handler(sk);
+        } else {
+            set_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags);
+        }                                                    
+        bh_unlock_sock(sk); 
+
+        clear_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags);
+        //sk_free(sk); /* zym: free sk here seems to lock the socket (not sure) */
+    }
+}
 
 void __init tcp_tasklet_init(void)
 {
@@ -853,11 +897,18 @@ void __init tcp_tasklet_init(void)
 
 	for_each_possible_cpu(i) {
 		struct tsq_tasklet *tsq = &per_cpu(tsq_tasklet, i);
+        struct qbackoff_tasklet *qbackoff = &per_cpu(qbackoff_tasklet, i); /* zym */
 
 		INIT_LIST_HEAD(&tsq->head);
 		tasklet_init(&tsq->tasklet,
 			     tcp_tasklet_func,
 			     (unsigned long)tsq);
+
+        /* zym */
+        INIT_LIST_HEAD(&qbackoff->head);
+        tasklet_init(&qbackoff->tasklet,
+                 qbackoff_tasklet_func,
+                 (unsigned long)qbackoff);
 	}
 }
 
@@ -919,7 +970,21 @@ enum hrtimer_restart tcp_qbackoff_kick(struct hrtimer *timer){
     unsigned long flags;
     bool empty;
 
-    test_and_clear_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+    //test_and_clear_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+   // return HRTIMER_NORESTART;
+    
+    if(test_and_clear_bit(QBACKOFF_STOP, &tp->qbackoff_flags) && !test_and_set_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags)){
+        struct qbackoff_tasklet *qbackoff;
+
+        local_irq_save(flags);
+        qbackoff = this_cpu_ptr(&qbackoff_tasklet);
+        empty = list_empty(&qbackoff->head);
+        list_add(&tp->qbackoff_node, &qbackoff->head);
+        if(empty)
+            tasklet_schedule(&qbackoff->tasklet);
+        local_irq_restore(flags);
+    }
+
     return HRTIMER_NORESTART;
 }
 
@@ -992,7 +1057,7 @@ static void tcp_internal_pacing(struct sock *sk, const struct sk_buff *skb)
 /* zym : reset qbackoff timer */
 void tcp_qbackoff_reset_timer(struct sock *sk)
 {
-    sk->qbackoff_expire = 5 * 1E4L;
+    sk->qbackoff_expire = 1000000;
     hrtimer_start(&tcp_sk(sk)->qbackoff_timer, ktime_add_ns(ktime_get(), sk->qbackoff_expire), HRTIMER_MODE_ABS_PINNED);
 }
 
@@ -1148,8 +1213,9 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	err = icsk->icsk_af_ops->queue_xmit(sk, skb, &inet->cork.fl);
 	
 	/* zym: keep logic intact */
-    tcp_qbackoff_reset_timer(sk);
     set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+    tcp_qbackoff_reset_timer(sk);
+    //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
     if(err == NET_XMIT_BACKOFF){
         refcount_sub_and_test(skb->truesize, &sk->sk_wmem_alloc);
         //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
@@ -2328,6 +2394,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		if (tcp_pacing_check(sk))
 			break;
 
+
 		tso_segs = tcp_init_tso_segs(skb, mss_now);
 		BUG_ON(!tso_segs);
 
@@ -2381,6 +2448,9 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			break;
 
 		/* zym : break if needs to back off */
+        if (test_bit(QBACKOFF_DEFERRED, &tcp_sk(sk)->qbackoff_flags))
+            clear_bit(QBACKOFF_DEFERRED, &tcp_sk(sk)->qbackoff_flags);
+
         if (test_bit(QBACKOFF_STOP, &tcp_sk(sk)->qbackoff_flags))
             break;
 
