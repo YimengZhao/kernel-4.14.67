@@ -397,6 +397,12 @@ enum qbackoff_enum {
     QBACKOFF_STOP,
 };
 
+enum qbackoff_flags {
+    QBACKOFF_QUEUED_B = (1UL << QBACKOFF_QUEUED),
+    QBACKOFF_DEFERRED_B = (1UL << QBACKOFF_DEFERRED),
+    QBACKOFF_STOP_B = (1UL << QBACKOFF_STOP),
+};
+
 static inline struct tcp_sock *tcp_sk(const struct sock *sk)
 {
 	return (struct tcp_sock *)sk;

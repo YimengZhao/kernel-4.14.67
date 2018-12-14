@@ -811,13 +811,18 @@ void tcp_release_cb(struct sock *sk)
 
     /* zym: deferred from qbackoff_tasklet_func */
     struct tcp_sock *tp = tcp_sk(sk);
-    if(test_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags))
-        tcp_tsq_handler(sk);
+    unsigned long qbackoff_flags, nqbackoff_flags;
+    do {
+        qbackoff_flags = tp->qbackoff_flags;
+        if(!(qbackoff_flags & QBACKOFF_DEFERRED_B))
+            break;
+        nqbackoff_flags = qbackoff_flags & ~QBACKOFF_DEFERRED_B;
+    }while(cmpxchg(&tp->qbackoff_flags, qbackoff_flags, nqbackoff_flags) != qbackoff_flags);
 
 	/* perform an atomic operation only if at least one flag is set */
 	do {
 		flags = sk->sk_tsq_flags;
-		if (!(flags & TCP_DEFERRED_ALL))
+		if (!(flags & TCP_DEFERRED_ALL)) 
 			return;
 		nflags = flags & ~TCP_DEFERRED_ALL;
 	} while (cmpxchg(&sk->sk_tsq_flags, flags, nflags) != flags);
@@ -877,17 +882,20 @@ static void qbackoff_tasklet_func(unsigned long data)
         list_del(&tp->qbackoff_node);
 
         sk = (struct sock *)tp;
-        bh_lock_sock(sk);
-
-        if (!sock_owned_by_user(sk)) {
-            tcp_tsq_handler(sk);
-        } else {
-            set_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags);
-        }                                                    
-        bh_unlock_sock(sk); 
-
+        smp_mb__before_atomic();
         clear_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags);
-        //sk_free(sk); /* zym: free sk here seems to lock the socket (not sure) */
+
+        if(!sk->sk_lock.owned &&
+           test_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags)){
+            bh_lock_sock(sk);
+            if(!sock_owned_by_user(sk)){
+                clear_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags);
+                tcp_tsq_handler(sk);
+            }
+            bh_unlock_sock(sk);
+        }
+
+        sk_free(sk);
     }
 }
 
@@ -967,22 +975,31 @@ out:
 /* zym: similar to tcp_pace_kick */
 enum hrtimer_restart tcp_qbackoff_kick(struct hrtimer *timer){
     struct tcp_sock *tp = container_of(timer, struct tcp_sock, qbackoff_timer);
-    unsigned long flags;
-    bool empty;
+    struct sock *sk = (struct sock *)tp;
+    unsigned long flags, nval, oval;
 
-    //test_and_clear_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
-   // return HRTIMER_NORESTART;
-    
-    if(test_and_clear_bit(QBACKOFF_STOP, &tp->qbackoff_flags) && !test_and_set_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags)){
+    for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
         struct qbackoff_tasklet *qbackoff;
+        bool empty;
 
-        local_irq_save(flags);
+        if(oval & QBACKOFF_QUEUED_B)
+            break;
+
+        nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
+        nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
+        if(nval != oval)
+            continue;
+
+        if(!refcount_inc_not_zero(&sk->sk_wmem_alloc))
+            break;
+
+        //printk(KERN_DEBUG "qbackoff add tasklet");
         qbackoff = this_cpu_ptr(&qbackoff_tasklet);
         empty = list_empty(&qbackoff->head);
         list_add(&tp->qbackoff_node, &qbackoff->head);
         if(empty)
             tasklet_schedule(&qbackoff->tasklet);
-        local_irq_restore(flags);
+        break;
     }
 
     return HRTIMER_NORESTART;
@@ -997,6 +1014,7 @@ enum hrtimer_restart tcp_pace_kick(struct hrtimer *timer)
 	struct sock *sk = (struct sock *)tp;
 	unsigned long nval, oval;
 
+    printk(KERN_DEBUG "pace kick");
 	for (oval = READ_ONCE(sk->sk_tsq_flags);; oval = nval) {
 		struct tsq_tasklet *tsq;
 		bool empty;
@@ -1012,6 +1030,7 @@ enum hrtimer_restart tcp_pace_kick(struct hrtimer *timer)
 		if (!refcount_inc_not_zero(&sk->sk_wmem_alloc))
 			break;
 		/* queue this socket to tasklet queue */
+        printk(KERN_DEBUG "pace add tasklet");
 		tsq = this_cpu_ptr(&tsq_tasklet);
 		empty = list_empty(&tsq->head);
 		list_add(&tp->tsq_node, &tsq->head);
