@@ -2983,7 +2983,7 @@ static int xmit_one(struct sk_buff *skb, struct net_device *dev,
 		dev_queue_xmit_nit(skb, dev);
 
 	len = skb->len;
-    //printk(KERN_DEBUG "skb len: %d", len); /* zym: debug*/
+    printk(KERN_DEBUG "skb len: %d", len); /* zym: debug*/
 	trace_net_dev_start_xmit(skb, dev);
 	rc = netdev_start_xmit(skb, dev, txq, more);
 	trace_net_dev_xmit(skb, rc, dev, len);

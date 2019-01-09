@@ -479,7 +479,7 @@ struct sock {
 	struct rcu_head		sk_rcu;
 
     /* zym: qbackoff parameters */
-    u64 qbackoff_expire;
+    long qbackoff_expire;
 };
 
 enum sk_pacing {

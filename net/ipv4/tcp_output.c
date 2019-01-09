@@ -1014,7 +1014,7 @@ enum hrtimer_restart tcp_pace_kick(struct hrtimer *timer)
 	struct sock *sk = (struct sock *)tp;
 	unsigned long nval, oval;
 
-    printk(KERN_DEBUG "pace kick");
+    //printk(KERN_DEBUG "pace kick");
 	for (oval = READ_ONCE(sk->sk_tsq_flags);; oval = nval) {
 		struct tsq_tasklet *tsq;
 		bool empty;
@@ -1030,7 +1030,6 @@ enum hrtimer_restart tcp_pace_kick(struct hrtimer *timer)
 		if (!refcount_inc_not_zero(&sk->sk_wmem_alloc))
 			break;
 		/* queue this socket to tasklet queue */
-        printk(KERN_DEBUG "pace add tasklet");
 		tsq = this_cpu_ptr(&tsq_tasklet);
 		empty = list_empty(&tsq->head);
 		list_add(&tp->tsq_node, &tsq->head);
@@ -1079,6 +1078,64 @@ void tcp_qbackoff_reset_timer(struct sock *sk)
     sk->qbackoff_expire = 1000000;
     hrtimer_start(&tcp_sk(sk)->qbackoff_timer, ktime_add_ns(ktime_get(), sk->qbackoff_expire), HRTIMER_MODE_ABS_PINNED);
 }
+
+static void qbackoff_resume_func(struct work_struct *work)
+{
+    struct tcp_sock *tp = container_of(work, struct tcp_sock, qbackoff_resume_task.work);
+    struct sock *sk = (struct sock *)tp;
+
+    smp_mb__before_atomic();
+    sk->qbackoff_expire++;
+    printk(KERN_DEBUG "exp: %ld", sk->qbackoff_expire);
+    set_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags);
+    clear_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags);
+    clear_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+
+    if(!sk->sk_lock.owned &&
+        test_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags)){
+            lock_sock(sk);
+            if(!sock_owned_by_user(sk)){
+                clear_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags);
+                tcp_tsq_handler(sk);
+            }
+            release_sock(sk);
+    }
+
+    sk_free(sk);
+}
+
+
+
+void qbackoff_queue_work(struct sock *sk)
+{
+    struct tcp_sock *tp = tcp_sk(sk);
+    unsigned long flags, nval, oval;
+
+    for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
+        if(oval & QBACKOFF_QUEUED_B)
+            break;
+
+        //nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
+        nval = oval | QBACKOFF_QUEUED_B;
+        nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
+        if(nval != oval)
+            continue;
+
+        if(!refcount_inc_not_zero(&sk->sk_wmem_alloc))
+            break;
+        
+        if(!qbackoff_wq)
+            return;
+        INIT_DELAYED_WORK(&tp->qbackoff_resume_task, qbackoff_resume_func);
+        u64 exp_time = 1000000;
+        long j = nsecs_to_jiffies(exp_time);
+        printk(KERN_DEBUG "time: %ld", j);
+        queue_delayed_work(qbackoff_wq, &tp->qbackoff_resume_task, nsecs_to_jiffies(exp_time));
+        break;
+    }
+}
+
+   
 
 /* This routine actually transmits TCP packets queued in by
  * tcp_do_sendmsg().  This is used by both the initial
@@ -1233,8 +1290,8 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	
 	/* zym: keep logic intact */
     set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
-    tcp_qbackoff_reset_timer(sk);
-    //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+    //tcp_qbackoff_reset_timer(sk);
+    qbackoff_queue_work(sk);
     if(err == NET_XMIT_BACKOFF){
         refcount_sub_and_test(skb->truesize, &sk->sk_wmem_alloc);
         //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
@@ -1244,8 +1301,6 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 		tcp_enter_cwr(sk);
 		err = net_xmit_eval(err);
 
-        /* zym: stop qbackoff timer */
-        //hrtimer_cancel(&tcp_sk(sk)->qbackoff_timer);
 	}
 	/* zym: keep logic intact */
 	if ((!err || err == NET_XMIT_BACKOFF) && oskb) {  
