@@ -369,7 +369,6 @@ struct tcp_sock {
     struct list_head qbackoff_node;
     unsigned long qbackoff_flags;
 
-    struct delayed_work qbackoff_resume_task;
 };
 
 enum tsq_enum {
