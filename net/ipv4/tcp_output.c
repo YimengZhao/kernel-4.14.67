@@ -819,6 +819,9 @@ void tcp_release_cb(struct sock *sk)
         nqbackoff_flags = qbackoff_flags & ~QBACKOFF_DEFERRED_B;
     }while(cmpxchg(&tp->qbackoff_flags, qbackoff_flags, nqbackoff_flags) != qbackoff_flags);
 
+    if(qbackoff_flags & QBACKOFF_DEFERRED_B)
+        tcp_tsq_handler(sk);
+
 	/* perform an atomic operation only if at least one flag is set */
 	do {
 		flags = sk->sk_tsq_flags;
@@ -1085,8 +1088,8 @@ static void qbackoff_resume_func(struct work_struct *work)
     struct sock *sk = (struct sock *)tp;
 
     smp_mb__before_atomic();
-    sk->qbackoff_expire++;
-    printk(KERN_DEBUG "exp: %ld", sk->qbackoff_expire);
+    //sk->qbackoff_expire++;
+    //printk(KERN_DEBUG "exp: %ld", sk->qbackoff_expire);
     set_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags);
     clear_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags);
     clear_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
@@ -1127,9 +1130,9 @@ void qbackoff_queue_work(struct sock *sk)
         if(!qbackoff_wq)
             return;
         INIT_DELAYED_WORK(&tp->qbackoff_resume_task, qbackoff_resume_func);
-        u64 exp_time = 1000000;
-        long j = nsecs_to_jiffies(exp_time);
-        printk(KERN_DEBUG "time: %ld", j);
+        u64 exp_time = 10000000;
+        //long j = nsecs_to_jiffies(exp_time);
+        //printk(KERN_DEBUG "time: %ld", j);
         queue_delayed_work(qbackoff_wq, &tp->qbackoff_resume_task, nsecs_to_jiffies(exp_time));
         break;
     }
@@ -1289,13 +1292,13 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	err = icsk->icsk_af_ops->queue_xmit(sk, skb, &inet->cork.fl);
 	
 	/* zym: keep logic intact */
-    set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+    //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
     //tcp_qbackoff_reset_timer(sk);
-    qbackoff_queue_work(sk);
+    //qbackoff_queue_work(sk);
     if(err == NET_XMIT_BACKOFF){
-        refcount_sub_and_test(skb->truesize, &sk->sk_wmem_alloc);
-        //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
-        //tcp_qbackoff_reset_timer(sk);
+        //refcount_sub_and_test(skb->truesize, &sk->sk_wmem_alloc);
+        set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+        qbackoff_queue_work(sk);
     }
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
 		tcp_enter_cwr(sk);

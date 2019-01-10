@@ -2983,7 +2983,7 @@ static int xmit_one(struct sk_buff *skb, struct net_device *dev,
 		dev_queue_xmit_nit(skb, dev);
 
 	len = skb->len;
-    printk(KERN_DEBUG "skb len: %d", len); /* zym: debug*/
+    //printk(KERN_DEBUG "skb len: %d", len); /* zym: debug*/
 	trace_net_dev_start_xmit(skb, dev);
 	rc = netdev_start_xmit(skb, dev, txq, more);
 	trace_net_dev_xmit(skb, rc, dev, len);
@@ -3186,11 +3186,11 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	spin_lock(root_lock);
 
     /* zym: need to free skb here to keep the correct number of reference on the skb */
-	/*if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
+	if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
 		kfree_skb(skb);	
 		spin_unlock(root_lock);
 		return NET_XMIT_BACKOFF;
-	}*/
+	}
 
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
 		__qdisc_drop(skb, &to_free);
