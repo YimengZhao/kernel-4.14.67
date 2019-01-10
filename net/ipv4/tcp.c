@@ -306,11 +306,6 @@ EXPORT_SYMBOL(tcp_memory_allocated);
 struct percpu_counter tcp_sockets_allocated;
 EXPORT_SYMBOL(tcp_sockets_allocated);
 
-/* zym
- */
-struct workqueue_struct *qbackoff_wq;
-EXPORT_SYMBOL(qbackoff_wq);
-
 /*
  * TCP splice context
  */
@@ -3563,7 +3558,4 @@ void __init tcp_init(void)
 	tcp_metrics_init();
 	BUG_ON(tcp_register_congestion_control(&tcp_reno) != 0);
 	tcp_tasklet_init();
-
-    /* zym */
-    qbackoff_wq = create_workqueue("qbackoff_workqueue");
 }
