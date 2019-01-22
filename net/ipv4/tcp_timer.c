@@ -719,7 +719,4 @@ void tcp_init_xmit_timers(struct sock *sk)
 		     HRTIMER_MODE_ABS_PINNED);
 	tcp_sk(sk)->pacing_timer.function = tcp_pace_kick;
 
-    /* zym: add qbackoff timer*/
-    hrtimer_init(&tcp_sk(sk)->qbackoff_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS_PINNED);
-    tcp_sk(sk)->qbackoff_timer.function = tcp_qbackoff_kick;
 }

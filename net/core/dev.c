@@ -3163,6 +3163,9 @@ static void qdisc_pkt_len_init(struct sk_buff *skb)
 	}
 }
 
+long i;
+int prev;
+int res = 100;
 static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 				 struct net_device *dev,
 				 struct netdev_queue *txq)
@@ -3171,6 +3174,8 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	struct sk_buff *to_free = NULL;
 	bool contended;
 	int rc;
+
+    bool mark = false;
 
 	qdisc_calculate_pkt_len(skb, q);
 	/*
@@ -3187,10 +3192,25 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
     /* zym: need to free skb here to keep the correct number of reference on the skb */
 	if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
+        i++;
+        printk(KERN_DEBUG "qdisc:%ld",i);
 		kfree_skb(skb);	
 		spin_unlock(root_lock);
 		return NET_XMIT_BACKOFF;
 	}
+
+    
+    /*if(q->q.qlen - qdisc_dev(q)->tx_queue_len < res && q->q.qlen > prev){
+        if(q->q.qlen > prev){
+            mark = true;
+            if(res < 300)
+                res++;
+        }
+        else{
+            res--;
+        }
+    }
+    prev = q->q.qlen;*/
 
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
 		__qdisc_drop(skb, &to_free);
@@ -3230,6 +3250,9 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 		kfree_skb_list(to_free);
 	if (unlikely(contended))
 		spin_unlock(&q->busylock);
+
+    if(mark)
+        rc = 100;
 	return rc;
 }
 

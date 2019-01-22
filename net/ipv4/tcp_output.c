@@ -866,6 +866,11 @@ struct qbackoff_tasklet {
 };
 static DEFINE_PER_CPU(struct qbackoff_tasklet, qbackoff_tasklet);
 
+struct qbackoff_list {
+    struct list_head        head;
+};
+struct qbackoff_list *qbackoff_head;
+
 /* zym : similar to tsq_tasklet_func */
 static void qbackoff_tasklet_func(unsigned long data)
 {
@@ -920,8 +925,55 @@ void __init tcp_tasklet_init(void)
         tasklet_init(&qbackoff->tasklet,
                  qbackoff_tasklet_func,
                  (unsigned long)qbackoff);
+
 	}
+
+    /* zym */
+    qbackoff_head = kmalloc(sizeof(struct qbackoff_list), GFP_KERNEL);
+    INIT_LIST_HEAD(&qbackoff_head->head);
+    if(qbackoff_head)
+        INIT_LIST_HEAD(&qbackoff_head->head);
 }
+
+/* zym */
+void qbackoff_add_tasklet(void){
+    struct tcp_sock *tp;
+    struct sock *sk;
+    unsigned long flags, nval, oval;
+
+    tp = list_first_entry_or_null(&qbackoff_head->head, struct tcp_sock, qbackoff_node);
+    if(!tp)
+        return;
+    list_del(&tp->qbackoff_node);
+    //tcp_mstamp_refresh(tp);
+    sk = (struct sock *)tp;
+
+    for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
+        struct qbackoff_tasklet *qbackoff;
+        bool empty;
+
+        if(oval & QBACKOFF_QUEUED_B)
+            break;
+
+        nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
+        nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
+        if(nval != oval)
+            continue;
+
+        if(!refcount_inc_not_zero(&sk->sk_wmem_alloc))
+            break;
+
+        //printk(KERN_DEBUG "qbackoff add tasklet");
+        qbackoff = this_cpu_ptr(&qbackoff_tasklet);
+        empty = list_empty(&qbackoff->head);
+        list_add(&tp->qbackoff_node, &qbackoff->head);
+        if(empty)
+            tasklet_schedule(&qbackoff->tasklet);
+        break;
+    }
+
+}
+
 
 /*
  * Write buffer destructor automatically called from kfree_skb.
@@ -971,41 +1023,11 @@ void tcp_wfree(struct sk_buff *skb)
 		local_irq_restore(flags);
 		return;
 	}
+
+    /* zym */
+    qbackoff_add_tasklet();
 out:
 	sk_free(sk);
-}
-
-/* zym: similar to tcp_pace_kick */
-enum hrtimer_restart tcp_qbackoff_kick(struct hrtimer *timer){
-    struct tcp_sock *tp = container_of(timer, struct tcp_sock, qbackoff_timer);
-    struct sock *sk = (struct sock *)tp;
-    unsigned long flags, nval, oval;
-
-    for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
-        struct qbackoff_tasklet *qbackoff;
-        bool empty;
-
-        if(oval & QBACKOFF_QUEUED_B)
-            break;
-
-        nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
-        nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
-        if(nval != oval)
-            continue;
-
-        if(!refcount_inc_not_zero(&sk->sk_wmem_alloc))
-            break;
-
-        //printk(KERN_DEBUG "qbackoff add tasklet");
-        qbackoff = this_cpu_ptr(&qbackoff_tasklet);
-        empty = list_empty(&qbackoff->head);
-        list_add(&tp->qbackoff_node, &qbackoff->head);
-        if(empty)
-            tasklet_schedule(&qbackoff->tasklet);
-        break;
-    }
-
-    return HRTIMER_NORESTART;
 }
 
 /* Note: Called under hard irq.
@@ -1075,14 +1097,7 @@ static void tcp_internal_pacing(struct sock *sk, const struct sk_buff *skb)
 		      HRTIMER_MODE_ABS_PINNED);
 }
 
-/* zym : reset qbackoff timer */
-void tcp_qbackoff_reset_timer(struct sock *sk)
-{
-    sk->qbackoff_expire = 1000000;
-    hrtimer_start(&tcp_sk(sk)->qbackoff_timer, ktime_add_ns(ktime_get(), sk->qbackoff_expire), HRTIMER_MODE_ABS_PINNED);
-}
-
-   
+  
 
 /* This routine actually transmits TCP packets queued in by
  * tcp_do_sendmsg().  This is used by both the initial
@@ -1238,12 +1253,12 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	/* zym: keep logic intact */
     //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
     //tcp_qbackoff_reset_timer(sk);
-    if(err == NET_XMIT_BACKOFF){
-        //refcount_sub_and_test(skb->truesize, &sk->sk_wmem_alloc);
+    /*if(err == NET_XMIT_BACKOFF || err == 100){
         set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
-        tcp_qbackoff_reset_timer(sk);
-        //refcount_sub_and_test(skb->truesize, &sk->sk_wmem_alloc);      
-    }
+        list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
+        if(err == 100)
+            err = 0;
+    }*/
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
 		tcp_enter_cwr(sk);
 		err = net_xmit_eval(err);
@@ -2397,7 +2412,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 
 	sent_pkts = 0;
 
-	tcp_mstamp_refresh(tp);
+	//tcp_mstamp_refresh(tp);
 	if (!push_one) {
 		/* Do MTU probing. */
 		result = tcp_mtu_probe(sk);
@@ -2475,8 +2490,11 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
         if (test_bit(QBACKOFF_STOP, &tcp_sk(sk)->qbackoff_flags))
             break;
 
+        tcp_mstamp_refresh(tp);
         if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
 			break;
+
+        //tcp_mstamp_refresh(tp);   /* zym */
 
 repair:
 		/* Advance the send_head.  This one is sent out.

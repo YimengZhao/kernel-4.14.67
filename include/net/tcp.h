@@ -280,10 +280,6 @@ extern atomic_long_t tcp_memory_allocated;
 extern struct percpu_counter tcp_sockets_allocated;
 extern unsigned long tcp_memory_pressure;
 
-/* zym
- */
-extern struct workqueue_struct *qbackoff_wq;
-
 /* optimized version of sk_under_memory_pressure() for TCP sockets */
 static inline bool tcp_under_memory_pressure(const struct sock *sk)
 {
@@ -585,7 +581,6 @@ void tcp_init_xmit_timers(struct sock *);
 static inline void tcp_clear_xmit_timers(struct sock *sk)
 {
 	hrtimer_cancel(&tcp_sk(sk)->pacing_timer);
-    hrtimer_cancel(&tcp_sk(sk)->qbackoff_timer); /* zym : cancel qbackoff timer*/
 	inet_csk_clear_xmit_timers(sk);
 }
 
@@ -1952,6 +1947,7 @@ static inline s64 tcp_rto_delta_us(const struct sock *sk)
 	const struct sk_buff *skb = tcp_write_queue_head(sk);
 	u32 rto = inet_csk(sk)->icsk_rto;
 	u64 rto_time_stamp_us = skb->skb_mstamp + jiffies_to_usecs(rto);
+    //u64 rto_time_stamp_us = tcp_sk(sk)->tcp_mstamp + jiffies_to_usecs(rto);
 
 	return rto_time_stamp_us - tcp_sk(sk)->tcp_mstamp;
 }
