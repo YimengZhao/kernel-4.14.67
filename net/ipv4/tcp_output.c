@@ -1131,7 +1131,7 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	
 	/* zym: keep logic intact */
     if(err == NET_XMIT_BACKOFF){
-        refcount_sub_and_test(skb->truesize, &sk->sk_wmem_alloc);
+        //refcount_sub_and_test(skb->truesize-1, &sk->sk_wmem_alloc);
 
     }
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
