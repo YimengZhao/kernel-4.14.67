@@ -945,7 +945,6 @@ void qbackoff_add_tasklet(void){
     if(!tp)
         return;
     list_del(&tp->qbackoff_node);
-    //tcp_mstamp_refresh(tp);
     sk = (struct sock *)tp;
 
     for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
@@ -1001,6 +1000,10 @@ void tcp_wfree(struct sk_buff *skb)
 	if (refcount_read(&sk->sk_wmem_alloc) >= SKB_TRUESIZE(1) && this_cpu_ksoftirqd() == current)
 		goto out;
 
+    /* zym */
+    /*if(test_bit(QBACKOFF_STOP, &tp->qbackoff_flags))
+        goto out;*/
+
 	for (oval = READ_ONCE(sk->sk_tsq_flags);; oval = nval) {
 		struct tsq_tasklet *tsq;
 		bool empty;
@@ -1023,7 +1026,6 @@ void tcp_wfree(struct sk_buff *skb)
 		local_irq_restore(flags);
 		return;
 	}
-
     /* zym */
     qbackoff_add_tasklet();
 out:
@@ -1253,12 +1255,12 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	/* zym: keep logic intact */
     //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
     //tcp_qbackoff_reset_timer(sk);
-    /*if(err == NET_XMIT_BACKOFF || err == 100){
+    if(err == NET_XMIT_BACKOFF || err == 100){
         set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
         list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
         if(err == 100)
             err = 0;
-    }*/
+    }
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
 		tcp_enter_cwr(sk);
 		err = net_xmit_eval(err);
@@ -2315,7 +2317,7 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 				  unsigned int factor)
 {
 	unsigned int limit;
-	return false;    /* zym: disable tsq. */ 
+	//return false;    /* zym: disable tsq. */ 
 
 	limit = max(2 * skb->truesize, sk->sk_pacing_rate >> 10);
 	limit = min_t(u32, limit, sysctl_tcp_limit_output_bytes);
@@ -2412,7 +2414,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 
 	sent_pkts = 0;
 
-	//tcp_mstamp_refresh(tp);
+	tcp_mstamp_refresh(tp);
 	if (!push_one) {
 		/* Do MTU probing. */
 		result = tcp_mtu_probe(sk);
@@ -2490,11 +2492,9 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
         if (test_bit(QBACKOFF_STOP, &tcp_sk(sk)->qbackoff_flags))
             break;
 
-        tcp_mstamp_refresh(tp);
         if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
 			break;
 
-        //tcp_mstamp_refresh(tp);   /* zym */
 
 repair:
 		/* Advance the send_head.  This one is sent out.
