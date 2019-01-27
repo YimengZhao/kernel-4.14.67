@@ -1008,7 +1008,7 @@ void tcp_wfree(struct sk_buff *skb)
 		struct tsq_tasklet *tsq;
 		bool empty;
 
-		if (!(oval & TSQF_THROTTLED) || (oval & TSQF_QUEUED))
+		if (!(oval & TSQF_THROTTLED) || (oval & TSQF_QUEUED) || (oval & QBACKOFF_STOP_B))   /* zym: if tcp_wfree is called because qdisc is full, should not resend immediately */
 			goto out;
 
 		nval = (oval & ~TSQF_THROTTLED) | TSQF_QUEUED | TCPF_TSQ_DEFERRED;
