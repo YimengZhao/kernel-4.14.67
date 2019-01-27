@@ -927,24 +927,13 @@ void __init tcp_tasklet_init(void)
                  (unsigned long)qbackoff);
 
 	}
-
-    /* zym */
-    qbackoff_head = kmalloc(sizeof(struct qbackoff_list), GFP_KERNEL);
-    INIT_LIST_HEAD(&qbackoff_head->head);
-    if(qbackoff_head)
-        INIT_LIST_HEAD(&qbackoff_head->head);
 }
 
-/* zym */
-void qbackoff_add_tasklet(void){
-    struct tcp_sock *tp;
+/* zym: timing wheel  */
+void qbackoff_add_tasklet(struct tcp_sock *tp){
     struct sock *sk;
     unsigned long flags, nval, oval;
 
-    tp = list_first_entry_or_null(&qbackoff_head->head, struct tcp_sock, qbackoff_node);
-    if(!tp)
-        return;
-    list_del(&tp->qbackoff_node);
     sk = (struct sock *)tp;
 
     for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
@@ -973,6 +962,34 @@ void qbackoff_add_tasklet(void){
 
 }
 
+unsigned long time_to_index(struct tw_queue *q, unsigned long time){
+    return (time/q->granularity) % q->num_of_buckets;
+}
+
+void tw_enqueue(struct tcp_sock *tp){
+    u64 now = ktime_get_ns();
+    unsigned long flags, index = 0;
+
+    local_irq_save(flags);
+    if(!qbackoff_queue->num_of_elements){
+        qbackoff_queue->head_ts = now;
+        qbackoff_queue->main_ts = now;
+        qbackoff_queue->max_ts = now + qbackoff_queue->horizon;
+    }
+
+    if(tp->qbackoff_expire < qbackoff_queue->head_ts)
+        tp->qbackoff_expire = qbackoff_queue->head_ts;
+    if(tp->qbackoff_expire > qbackoff_queue->max_ts)
+        tp->qbackoff_expire = qbackoff_queue->max_ts;
+
+    index = time_to_index(qbackoff_queue, tp->qbackoff_expire);
+    qbackoff_queue->num_of_elements++;
+
+    //add to bucket
+    list_add_tail(&tp->qbackoff_node, &(qbackoff_queue->main_buckets[index].head));
+    qbackoff_queue->main_buckets[index].qlen++;
+    local_irq_restore(flags);
+}
 
 /*
  * Write buffer destructor automatically called from kfree_skb.
@@ -1008,7 +1025,7 @@ void tcp_wfree(struct sk_buff *skb)
 		struct tsq_tasklet *tsq;
 		bool empty;
 
-		if (!(oval & TSQF_THROTTLED) || (oval & TSQF_QUEUED))
+		if ((oval & QBACKOFF_STOP_B) || !(oval & TSQF_THROTTLED) || (oval & TSQF_QUEUED))
 			goto out;
 
 		nval = (oval & ~TSQF_THROTTLED) | TSQF_QUEUED | TCPF_TSQ_DEFERRED;
@@ -1026,8 +1043,7 @@ void tcp_wfree(struct sk_buff *skb)
 		local_irq_restore(flags);
 		return;
 	}
-    /* zym */
-    qbackoff_add_tasklet();
+
 out:
 	sk_free(sk);
 }
@@ -1253,13 +1269,11 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	err = icsk->icsk_af_ops->queue_xmit(sk, skb, &inet->cork.fl);
 	
 	/* zym: keep logic intact */
-    //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
-    //tcp_qbackoff_reset_timer(sk);
-    if(err == NET_XMIT_BACKOFF || err == 100){
+    if(err == NET_XMIT_BACKOFF){
         set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
-        list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
-        if(err == 100)
-            err = 0;
+        //list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
+        tp->qbackoff_expire = 1000000;
+        tw_enqueue(tp);
     }
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
 		tcp_enter_cwr(sk);

@@ -282,6 +282,8 @@
 #include <asm/ioctls.h>
 #include <net/busy_poll.h>
 
+#include <linux/kthread.h>   /* zym */
+
 int sysctl_tcp_min_tso_segs __read_mostly = 2;
 
 int sysctl_tcp_autocorking __read_mostly = 1;
@@ -305,6 +307,11 @@ EXPORT_SYMBOL(tcp_memory_allocated);
  */
 struct percpu_counter tcp_sockets_allocated;
 EXPORT_SYMBOL(tcp_sockets_allocated);
+
+/* zym */
+struct tw_queue *qbackoff_queue;
+EXPORT_SYMBOL(qbackoff_queue);
+
 
 /*
  * TCP splice context
@@ -3480,6 +3487,83 @@ static void __init tcp_init_mem(void)
 	sysctl_tcp_mem[2] = sysctl_tcp_mem[0] * 2;	/* 9.37 % */
 }
 
+/* zym: timing wheel init */
+struct hrtimer *tw_timer;
+
+enum hrtimer_restart tw_kick(struct hrtimer *timer){
+    unsigned long flags, start_index, now_index;
+    struct list_head *q, *n;
+    struct tcp_sock *tp;
+    LIST_HEAD(list);
+
+    u64 now = ktime_get_ns();
+
+    if(!qbackoff_queue->num_of_elements){
+        qbackoff_queue->head_ts = now;
+        qbackoff_queue->main_ts = now;
+        qbackoff_queue->max_ts = now + qbackoff_queue->horizon;
+        goto forward;
+    }
+    
+    start_index = time_to_index(qbackoff_queue, qbackoff_queue->head_ts);
+    now_index = time_to_index(qbackoff_queue, now);
+
+    local_irq_save(flags);
+    while(!qbackoff_queue->main_buckets[start_index].qlen && start_index < now_index){
+        list_splice_init(&(qbackoff_queue->main_buckets[start_index].head), &list);
+
+        list_for_each_safe(q, n, &list){
+            tp = list_entry(q, struct tcp_sock, qbackoff_node);
+            qbackoff_add_tasklet(tp);
+        }
+
+
+        qbackoff_queue->main_buckets[start_index].qlen = 0; 
+        qbackoff_queue->num_of_elements--;
+
+        qbackoff_queue->head_ts++;
+        start_index = time_to_index(qbackoff_queue, qbackoff_queue->head_ts);
+    }
+    local_irq_restore(flags);
+    
+forward:    
+    hrtimer_forward(tw_timer, ktime_get(), ktime_set(0, qbackoff_queue->granularity));
+    return HRTIMER_RESTART;
+}
+
+static int tw_init(void)
+{
+    u64 granularity = 10000000;
+    
+    u64 horizon = 10000000000;
+    u64 now = ktime_get_ns();
+    int i = 0;
+
+    qbackoff_queue = kmalloc(sizeof(struct tw_queue), GFP_KERNEL);
+
+    qbackoff_queue->head_ts = now;
+    qbackoff_queue->main_ts = now;
+    qbackoff_queue->max_ts = now + horizon;
+
+    qbackoff_queue->horizon = horizon;
+    qbackoff_queue->granularity = granularity;
+    qbackoff_queue->num_of_buckets = horizon / granularity;
+    qbackoff_queue->num_of_elements = 0;
+
+    qbackoff_queue->main_buckets = kmalloc(sizeof(struct tw_queue) * qbackoff_queue->num_of_buckets, GFP_KERNEL);
+
+    for(i = 0; i < qbackoff_queue->num_of_buckets; i++){
+        qbackoff_queue->main_buckets[i].qlen = 0;
+        INIT_LIST_HEAD(&qbackoff_queue->main_buckets[i].head);
+    }
+
+    tw_timer = kmalloc(sizeof(struct hrtimer), GFP_KERNEL);
+    hrtimer_init(tw_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+    tw_timer->function = tw_kick;
+    hrtimer_start(tw_timer, ktime_set(0, granularity), HRTIMER_MODE_REL);
+    return 0;
+}
+
 void __init tcp_init(void)
 {
 	int max_rshare, max_wshare, cnt;
@@ -3559,4 +3643,6 @@ void __init tcp_init(void)
 	BUG_ON(tcp_register_congestion_control(&tcp_reno) != 0);
 	tcp_tasklet_init();
 
+    tw_init();  /* zym */
+    //kthread_run(tw_init, NULL, NULL);
 }
