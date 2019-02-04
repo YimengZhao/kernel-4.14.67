@@ -862,7 +862,6 @@ EXPORT_SYMBOL(tcp_release_cb);
 /* zym: similar to tsq_tasklet */
 struct qbackoff_tasklet {
     struct tasklet_struct   tasklet;
-    struct list_head        head;
 };
 static DEFINE_PER_CPU(struct qbackoff_tasklet, qbackoff_tasklet);
 
@@ -882,7 +881,7 @@ static void qbackoff_tasklet_func(unsigned long data)
     struct sock *sk;
 
     local_irq_save(flags);
-    list_splice_init(&qbackoff->head, &list);
+    list_splice_init(&qbackoff_head->head, &list);
     local_irq_restore(flags);
 
     list_for_each_safe(q, n, &list){
@@ -921,7 +920,7 @@ void __init tcp_tasklet_init(void)
 			     (unsigned long)tsq);
 
         /* zym */
-        INIT_LIST_HEAD(&qbackoff->head);
+        //INIT_LIST_HEAD(&qbackoff->head);
         tasklet_init(&qbackoff->tasklet,
                  qbackoff_tasklet_func,
                  (unsigned long)qbackoff);
@@ -938,39 +937,28 @@ void __init tcp_tasklet_init(void)
 /* zym */
 void qbackoff_add_tasklet(void){
     struct tcp_sock *tp;
-    struct sock *sk;
     unsigned long flags, nval, oval;
+    struct list_head *q, *n;
+    struct qbackoff_tasklet *qbackoff;
 
-    tp = list_first_entry_or_null(&qbackoff_head->head, struct tcp_sock, qbackoff_node);
-    if(!tp)
-        return;
-    list_del(&tp->qbackoff_node);
-    sk = (struct sock *)tp;
+    list_for_each_safe(q, n, &qbackoff_head->head){
+        tp = list_entry(q, struct tcp_sock, qbackoff_node);
+        for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
+            if(oval & QBACKOFF_QUEUED_B)
+                break;
 
-    for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
-        struct qbackoff_tasklet *qbackoff;
-        bool empty;
+            nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
+            nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
+            if(nval != oval)
+                continue;
 
-        if(oval & QBACKOFF_QUEUED_B)
             break;
-
-        nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
-        nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
-        if(nval != oval)
-            continue;
-
-        if(!refcount_inc_not_zero(&sk->sk_wmem_alloc))
-            break;
-
-        //printk(KERN_DEBUG "qbackoff add tasklet");
-        qbackoff = this_cpu_ptr(&qbackoff_tasklet);
-        empty = list_empty(&qbackoff->head);
-        list_add(&tp->qbackoff_node, &qbackoff->head);
-        if(empty)
-            tasklet_schedule(&qbackoff->tasklet);
-        break;
+        }
+        
     }
-
+    //printk(KERN_DEBUG "qbackoff add tasklet");
+    qbackoff = this_cpu_ptr(&qbackoff_tasklet);
+    tasklet_schedule(&qbackoff->tasklet);
 }
 
 
