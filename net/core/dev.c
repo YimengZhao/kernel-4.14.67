@@ -3175,8 +3175,6 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	bool contended;
 	int rc;
 
-    bool mark = false;
-
 	qdisc_calculate_pkt_len(skb, q);
 	/*
 	 * Heuristic to force contended enqueues to serialize on a
@@ -3192,10 +3190,13 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
     /* zym: need to free skb here to keep the correct number of reference on the skb */
 	if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
-        i++;
-        printk(KERN_DEBUG "qdisc:%ld",i);
+        //i++;
+        //printk(KERN_DEBUG "qdisc:%ld",i);
 		kfree_skb(skb);	
 		spin_unlock(root_lock);
+        if (unlikely(contended))
+            spin_unlock(&q->busylock);
+        
 		return NET_XMIT_BACKOFF;
 	}
 
@@ -3251,8 +3252,6 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	if (unlikely(contended))
 		spin_unlock(&q->busylock);
 
-    if(mark)
-        rc = 100;
 	return rc;
 }
 

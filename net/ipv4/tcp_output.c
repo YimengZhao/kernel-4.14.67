@@ -936,12 +936,17 @@ void __init tcp_tasklet_init(void)
 
 /* zym */
 void qbackoff_add_tasklet(void){
+    LIST_HEAD(list);
     struct tcp_sock *tp;
     unsigned long flags, nval, oval;
     struct list_head *q, *n;
     struct qbackoff_tasklet *qbackoff;
 
-    list_for_each_safe(q, n, &qbackoff_head->head){
+    local_irq_save(flags);
+    list_splice_init(&qbackoff_head->head, &list);
+    local_irq_restore(flags);
+
+    list_for_each_safe(q, n, &list){
         tp = list_entry(q, struct tcp_sock, qbackoff_node);
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
             if(oval & QBACKOFF_QUEUED_B)
@@ -953,7 +958,7 @@ void qbackoff_add_tasklet(void){
                 continue;
 
             break;
-        }
+      }
         
     }
     //printk(KERN_DEBUG "qbackoff add tasklet");
@@ -1243,11 +1248,12 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	/* zym: keep logic intact */
     //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
     //tcp_qbackoff_reset_timer(sk);
-    if(err == NET_XMIT_BACKOFF || err == 100){
+    if(err == NET_XMIT_BACKOFF){
+        unsigned long flags;
+        local_irq_save(flags);
         set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
         list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
-        if(err == 100)
-            err = 0;
+        local_irq_restore(flags);
     }
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
 		tcp_enter_cwr(sk);
