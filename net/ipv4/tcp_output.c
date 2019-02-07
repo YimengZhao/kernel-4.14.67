@@ -1272,7 +1272,7 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
     if(err == NET_XMIT_BACKOFF){
         set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
         //list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
-        tp->qbackoff_expire = 1000000;
+        tp->qbackoff_expire = 100000;
         tw_enqueue(tp);
     }
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {

@@ -3533,9 +3533,9 @@ forward:
 
 static int tw_init(void)
 {
-    u64 granularity = 10000000;
+    u64 granularity = 100000;
     
-    u64 horizon = 10000000000;
+    u64 horizon = 1000000000;
     u64 now = ktime_get_ns();
     int i = 0;
 
