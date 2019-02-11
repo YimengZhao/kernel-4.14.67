@@ -146,6 +146,8 @@
 #include <linux/sctp.h>
 #include <net/udp_tunnel.h>
 
+#include <net/tcp.h>    /* zym */
+
 #include "net-sysfs.h"
 
 /* Instead of increasing this, you should create a hash table. */
@@ -3174,6 +3176,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	struct sk_buff *to_free = NULL;
 	bool contended;
 	int rc;
+    struct tcp_sock *tp = tcp_sk(skb->sk);
 
     bool mark = false;
 
@@ -3192,9 +3195,10 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
     /* zym: need to free skb here to keep the correct number of reference on the skb */
 	if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
-        i++;
-        printk(KERN_DEBUG "qdisc:%ld",i);
-		kfree_skb(skb);	
+        //i++;
+        //printk(KERN_DEBUG "qdisc:%ld",i);
+		kfree_skb(skb);
+        list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
 		spin_unlock(root_lock);
 		return NET_XMIT_BACKOFF;
 	}
