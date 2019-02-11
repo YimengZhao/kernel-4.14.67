@@ -280,6 +280,12 @@ extern atomic_long_t tcp_memory_allocated;
 extern struct percpu_counter tcp_sockets_allocated;
 extern unsigned long tcp_memory_pressure;
 
+/* zym */
+struct qbackoff_list {                                                                                                                                                                                       
+    struct list_head        head;                                                                                                                                                                           
+};  
+extern struct qbackoff_list *qbackoff_head; 
+
 /* optimized version of sk_under_memory_pressure() for TCP sockets */
 static inline bool tcp_under_memory_pressure(const struct sock *sk)
 {

@@ -306,6 +306,10 @@ EXPORT_SYMBOL(tcp_memory_allocated);
 struct percpu_counter tcp_sockets_allocated;
 EXPORT_SYMBOL(tcp_sockets_allocated);
 
+/* zym */
+struct qbackoff_list *qbackoff_head;
+EXPORT_SYMBOL(qbackoff_head);
+
 /*
  * TCP splice context
  */

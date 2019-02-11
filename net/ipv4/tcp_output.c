@@ -865,10 +865,6 @@ struct qbackoff_tasklet {
 };
 static DEFINE_PER_CPU(struct qbackoff_tasklet, qbackoff_tasklet);
 
-struct qbackoff_list {
-    struct list_head        head;
-};
-struct qbackoff_list *qbackoff_head;
 
 /* zym : similar to tsq_tasklet_func */
 static void qbackoff_tasklet_func(unsigned long data)
@@ -1249,11 +1245,8 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
     //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
     //tcp_qbackoff_reset_timer(sk);
     if(err == NET_XMIT_BACKOFF){
-        unsigned long flags;
-        local_irq_save(flags);
         set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
-        list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
-        local_irq_restore(flags);
+        //list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
     }
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
 		tcp_enter_cwr(sk);
