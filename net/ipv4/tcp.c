@@ -282,7 +282,6 @@
 #include <asm/ioctls.h>
 #include <net/busy_poll.h>
 
-#include <linux/kthread.h>   /* zym */
 
 int sysctl_tcp_min_tso_segs __read_mostly = 2;
 
@@ -312,6 +311,8 @@ EXPORT_SYMBOL(tcp_sockets_allocated);
 struct tw_queue *qbackoff_queue;
 EXPORT_SYMBOL(qbackoff_queue);
 
+struct hrtimer *tw_timer;
+EXPORT_SYMBOL(tw_timer);
 
 /*
  * TCP splice context
@@ -3488,58 +3489,15 @@ static void __init tcp_init_mem(void)
 }
 
 /* zym: timing wheel init */
-struct hrtimer *tw_timer;
-
-enum hrtimer_restart tw_kick(struct hrtimer *timer){
-    unsigned long flags, start_index, now_index;
-    struct list_head *q, *n;
-    struct tcp_sock *tp;
-    LIST_HEAD(list);
-
-    u64 now = ktime_get_ns();
-
-    if(!qbackoff_queue->num_of_elements){
-        qbackoff_queue->head_ts = now;
-        qbackoff_queue->main_ts = now;
-        qbackoff_queue->max_ts = now + qbackoff_queue->horizon;
-        goto forward;
-    }
-    
-    start_index = time_to_index(qbackoff_queue, qbackoff_queue->head_ts);
-    now_index = time_to_index(qbackoff_queue, now);
-
-    local_irq_save(flags);
-    while(!qbackoff_queue->main_buckets[start_index].qlen && start_index < now_index){
-        list_splice_init(&(qbackoff_queue->main_buckets[start_index].head), &list);
-
-        list_for_each_safe(q, n, &list){
-            tp = list_entry(q, struct tcp_sock, qbackoff_node);
-            qbackoff_add_tasklet(tp);
-        }
-
-
-        qbackoff_queue->main_buckets[start_index].qlen = 0; 
-        qbackoff_queue->num_of_elements--;
-
-        qbackoff_queue->head_ts++;
-        start_index = time_to_index(qbackoff_queue, qbackoff_queue->head_ts);
-    }
-    local_irq_restore(flags);
-    
-forward:    
-    hrtimer_forward(tw_timer, ktime_get(), ktime_set(0, qbackoff_queue->granularity));
-    return HRTIMER_RESTART;
-}
-
 static int tw_init(void)
 {
-    u64 granularity = 100000;
+    u64 granularity = 10000;
     
-    u64 horizon = 1000000000;
+    u64 horizon = 10000000;
     u64 now = ktime_get_ns();
     int i = 0;
 
-    qbackoff_queue = kmalloc(sizeof(struct tw_queue), GFP_KERNEL);
+    qbackoff_queue = vmalloc(sizeof(struct tw_queue));
 
     qbackoff_queue->head_ts = now;
     qbackoff_queue->main_ts = now;
@@ -3550,17 +3508,17 @@ static int tw_init(void)
     qbackoff_queue->num_of_buckets = horizon / granularity;
     qbackoff_queue->num_of_elements = 0;
 
-    qbackoff_queue->main_buckets = kmalloc(sizeof(struct tw_queue) * qbackoff_queue->num_of_buckets, GFP_KERNEL);
+    qbackoff_queue->main_buckets = vmalloc(sizeof(struct tw_queue) * qbackoff_queue->num_of_buckets);
 
     for(i = 0; i < qbackoff_queue->num_of_buckets; i++){
         qbackoff_queue->main_buckets[i].qlen = 0;
         INIT_LIST_HEAD(&qbackoff_queue->main_buckets[i].head);
     }
 
-    tw_timer = kmalloc(sizeof(struct hrtimer), GFP_KERNEL);
+    tw_timer = vmalloc(sizeof(struct hrtimer));
     hrtimer_init(tw_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-    tw_timer->function = tw_kick;
-    hrtimer_start(tw_timer, ktime_set(0, granularity), HRTIMER_MODE_REL);
+    // tw_timer->function = tw_kick;
+    //hrtimer_start(tw_timer, ktime_set(0, granularity), HRTIMER_MODE_REL);
     return 0;
 }
 

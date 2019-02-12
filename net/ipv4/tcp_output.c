@@ -962,35 +962,6 @@ void qbackoff_add_tasklet(struct tcp_sock *tp){
 
 }
 
-unsigned long time_to_index(struct tw_queue *q, unsigned long time){
-    return (time/q->granularity) % q->num_of_buckets;
-}
-
-void tw_enqueue(struct tcp_sock *tp){
-    u64 now = ktime_get_ns();
-    unsigned long flags, index = 0;
-
-    local_irq_save(flags);
-    if(!qbackoff_queue->num_of_elements){
-        qbackoff_queue->head_ts = now;
-        qbackoff_queue->main_ts = now;
-        qbackoff_queue->max_ts = now + qbackoff_queue->horizon;
-    }
-
-    if(tp->qbackoff_expire < qbackoff_queue->head_ts)
-        tp->qbackoff_expire = qbackoff_queue->head_ts;
-    if(tp->qbackoff_expire > qbackoff_queue->max_ts)
-        tp->qbackoff_expire = qbackoff_queue->max_ts;
-
-    index = time_to_index(qbackoff_queue, tp->qbackoff_expire);
-    qbackoff_queue->num_of_elements++;
-
-    //add to bucket
-    list_add_tail(&tp->qbackoff_node, &(qbackoff_queue->main_buckets[index].head));
-    qbackoff_queue->main_buckets[index].qlen++;
-    local_irq_restore(flags);
-}
-
 /*
  * Write buffer destructor automatically called from kfree_skb.
  * We can't xmit new skbs from this context, as we might already
@@ -1271,9 +1242,6 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	/* zym: keep logic intact */
     if(err == NET_XMIT_BACKOFF){
         set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
-        //list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
-        tp->qbackoff_expire = 100000;
-        tw_enqueue(tp);
     }
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
 		tcp_enter_cwr(sk);

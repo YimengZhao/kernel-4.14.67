@@ -146,6 +146,8 @@
 #include <linux/sctp.h>
 #include <net/udp_tunnel.h>
 
+#include <net/tcp.h>
+
 #include "net-sysfs.h"
 
 /* Instead of increasing this, you should create a hash table. */
@@ -3163,6 +3165,96 @@ static void qdisc_pkt_len_init(struct sk_buff *skb)
 	}
 }
 
+static unsigned long time_to_index(struct tw_queue *q, unsigned long time){
+        return (time/q->granularity) % q->num_of_buckets;
+}
+
+static unsigned long get_min_index(void){
+    unsigned long head_ts = qbackoff_queue->head_ts;
+    unsigned long index = time_to_index(qbackoff_queue, qbackoff_queue->head_ts);
+    unsigned long index_max = time_to_index(qbackoff_queue, qbackoff_queue->max_ts);
+    while(!qbackoff_queue->main_buckets[index].qlen && index < index_max){
+        head_ts++;
+        index = time_to_index(qbackoff_queue, head_ts);
+    }
+    return index;
+}
+
+
+enum hrtimer_restart tw_kick(struct hrtimer *timer){
+    unsigned long flags, next_index, start_index, now_index;
+    struct list_head *q, *n;
+    struct tcp_sock *tp;
+    LIST_HEAD(list);
+
+    u64 now = ktime_get_ns();
+
+    if(!qbackoff_queue->num_of_elements){
+        qbackoff_queue->head_ts = now;
+        qbackoff_queue->main_ts = now;
+        qbackoff_queue->max_ts = now + qbackoff_queue->horizon;
+        goto forward;
+    }
+
+    start_index = time_to_index(qbackoff_queue, qbackoff_queue->head_ts);
+    now_index = time_to_index(qbackoff_queue, now);
+
+    local_irq_save(flags);
+    while(!qbackoff_queue->main_buckets[start_index].qlen && start_index < now_index){
+        list_splice_init(&(qbackoff_queue->main_buckets[start_index].head), &list);
+
+        list_for_each_safe(q, n, &list){
+            tp = list_entry(q, struct tcp_sock, qbackoff_node);
+            qbackoff_add_tasklet(tp);
+        }
+
+        qbackoff_queue->main_buckets[start_index].qlen = 0;
+        qbackoff_queue->num_of_elements--;
+
+        qbackoff_queue->head_ts++;
+        start_index = time_to_index(qbackoff_queue, qbackoff_queue->head_ts);
+    }
+    next_index = get_min_index();
+    
+    local_irq_restore(flags);
+
+forward:
+    hrtimer_forward(tw_timer, ktime_get(), ktime_set(0, next_index * qbackoff_queue->granularity));
+    return HRTIMER_RESTART;
+}
+
+static void tw_enqueue(struct tcp_sock *tp){
+        u64 now = ktime_get_ns();
+        unsigned long next_time, index = 0, min_index = 0;;
+
+        if(!qbackoff_queue->num_of_elements){
+            qbackoff_queue->head_ts = now;
+            qbackoff_queue->main_ts = now;
+            qbackoff_queue->max_ts = now + qbackoff_queue->horizon;
+        }
+    
+        if(tp->qbackoff_expire < qbackoff_queue->head_ts)
+            tp->qbackoff_expire = qbackoff_queue->head_ts;
+        if(tp->qbackoff_expire > qbackoff_queue->max_ts)
+            tp->qbackoff_expire = qbackoff_queue->max_ts;
+
+        index = time_to_index(qbackoff_queue, tp->qbackoff_expire);
+        qbackoff_queue->num_of_elements++;
+
+        //add to bucket
+        list_add_tail(&tp->qbackoff_node, &(qbackoff_queue->main_buckets[index].head));
+        qbackoff_queue->main_buckets[index].qlen++;
+
+        if(hrtimer_try_to_cancel(tw_timer) == -1)
+            return;
+
+        min_index = get_min_index();
+        next_time = min(min_index * qbackoff_queue->granularity, tp->qbackoff_expire);
+        hrtimer_init(tw_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+        tw_timer->function = tw_kick;
+        hrtimer_start(tw_timer, ktime_set(0, next_time), HRTIMER_MODE_REL);
+}
+
 static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 				 struct net_device *dev,
 				 struct netdev_queue *txq)
@@ -3171,6 +3263,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	struct sk_buff *to_free = NULL;
 	bool contended;
 	int rc;
+    struct tcp_sock *tp = tcp_sk(skb->sk);
 
     bool mark = false;
 
@@ -3191,8 +3284,12 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
         //i++;
         //printk(KERN_DEBUG "qdisc:%ld",i);
-		kfree_skb(skb);	
+		kfree_skb(skb);
+        tp->qbackoff_expire = 100000;
+        tw_enqueue(tp);
 		spin_unlock(root_lock);
+        if(unlikely(contended))
+            spin_unlock(&q->busylock);
 		return NET_XMIT_BACKOFF;
 	}
 
