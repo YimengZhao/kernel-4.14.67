@@ -3193,6 +3193,7 @@ enum hrtimer_restart tw_kick(struct hrtimer *timer){
         qbackoff_queue->head_ts = now;
         qbackoff_queue->main_ts = now;
         qbackoff_queue->max_ts = now + qbackoff_queue->horizon;
+        next_index = qbackoff_queue->horizon / qbackoff_queue->granularity;
         goto forward;
     }
 
