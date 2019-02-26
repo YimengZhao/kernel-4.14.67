@@ -3184,7 +3184,8 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
         //i++;
         //printk(KERN_DEBUG "qdisc:%ld",i);
-		kfree_skb(skb);
+		//kfree_skb(skb);
+        qbackoff_free_skb(skb);
         //list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
 		return NET_XMIT_BACKOFF;
 	}

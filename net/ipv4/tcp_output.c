@@ -931,46 +931,6 @@ void __init tcp_tasklet_init(void)
         INIT_LIST_HEAD(&qbackoff_head->head);
 }
 
-/* zym */
-void qbackoff_add_tasklet(void){
-    struct tcp_sock *tp;
-    struct sock *sk;
-    unsigned long flags, nval, oval;
-
-    local_irq_save(flags);
-    tp = list_first_entry_or_null(&qbackoff_head->head, struct tcp_sock, qbackoff_node);
-    if(!tp)
-        goto exit;
-    list_del(&tp->qbackoff_node);
-    sk = (struct sock *)tp;
-
-    for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
-        struct qbackoff_tasklet *qbackoff;
-        bool empty;
-
-        if(oval & QBACKOFF_QUEUED_B)
-            break;
-
-        nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
-        nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
-        if(nval != oval)
-            continue;
-
-        if(!refcount_inc_not_zero(&sk->sk_wmem_alloc))
-            break;
-
-        //printk(KERN_DEBUG "qbackoff add tasklet");
-        qbackoff = this_cpu_ptr(&qbackoff_tasklet);
-        empty = list_empty(&qbackoff->head);
-        list_add(&tp->qbackoff_node, &qbackoff->head);
-        if(empty)
-            tasklet_schedule(&qbackoff->tasklet);
-        break;
-    }
-exit:
-    local_irq_restore(flags);
-}
-
 
 /*
  * Write buffer destructor automatically called from kfree_skb.
@@ -2335,7 +2295,7 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 				  unsigned int factor)
 {
 	unsigned int limit;
-	//return false;    /* zym: disable tsq. */ 
+	return false;    /* zym: disable tsq. */ 
 
 	limit = max(2 * skb->truesize, sk->sk_pacing_rate >> 10);
 	limit = min_t(u32, limit, sysctl_tcp_limit_output_bytes);
