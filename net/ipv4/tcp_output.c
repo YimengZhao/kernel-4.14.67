@@ -1002,11 +1002,35 @@ void tcp_wfree(struct sk_buff *skb)
     /*if(test_bit(QBACKOFF_STOP, &tp->qbackoff_flags))
         goto out;*/
 
-	for (oval = READ_ONCE(sk->sk_tsq_flags);; oval = nval) {
+    for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
+        struct qbackoff_tasklet *qbackoff;
+        bool empty;
+
+        if(!(oval & QBACKOFF_STOP_B) || (oval & QBACKOFF_QUEUED_B))
+            goto out;
+
+        nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
+        nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
+        if(nval != oval)
+            continue;
+
+
+        //printk(KERN_DEBUG "qbackoff add tasklet");
+        local_irq_save(flags);
+        qbackoff = this_cpu_ptr(&qbackoff_tasklet);
+        empty = list_empty(&qbackoff->head);
+        list_add(&tp->qbackoff_node, &qbackoff->head);
+        if(empty)
+            tasklet_schedule(&qbackoff->tasklet);
+        local_irq_restore(flags);
+        return;
+    }
+
+	/*for (oval = READ_ONCE(sk->sk_tsq_flags);; oval = nval) {
 		struct tsq_tasklet *tsq;
 		bool empty;
 
-		if (!(oval & TSQF_THROTTLED) || (oval & TSQF_QUEUED) || (oval & QBACKOFF_STOP_B))   /* zym: if tcp_wfree is called because qdisc is full, should not resend immediately */
+		if (!(oval & TSQF_THROTTLED) || (oval & TSQF_QUEUED))   
 			goto out;
 
 		nval = (oval & ~TSQF_THROTTLED) | TSQF_QUEUED | TCPF_TSQ_DEFERRED;
@@ -1014,7 +1038,6 @@ void tcp_wfree(struct sk_buff *skb)
 		if (nval != oval)
 			continue;
 
-		/* queue this socket to tasklet queue */
 		local_irq_save(flags);
 		tsq = this_cpu_ptr(&tsq_tasklet);
 		empty = list_empty(&tsq->head);
@@ -1023,9 +1046,9 @@ void tcp_wfree(struct sk_buff *skb)
 			tasklet_schedule(&tsq->tasklet);
 		local_irq_restore(flags);
 		return;
-	}
+	}*/
     /* zym */
-    qbackoff_add_tasklet();
+    //qbackoff_add_tasklet();
 out:
 	sk_free(sk);
 }

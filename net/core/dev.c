@@ -3179,6 +3179,16 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
     struct tcp_sock *tp = tcp_sk(skb->sk);
 
     bool mark = false;
+    
+    /* zym: need to free skb here to keep the correct number of reference on the skb */
+	if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
+        //i++;
+        //printk(KERN_DEBUG "qdisc:%ld",i);
+		kfree_skb(skb);
+        //list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
+		return NET_XMIT_BACKOFF;
+	}
+
 
 	qdisc_calculate_pkt_len(skb, q);
 	/*
@@ -3193,19 +3203,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
 	spin_lock(root_lock);
 
-    /* zym: need to free skb here to keep the correct number of reference on the skb */
-	if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
-        //i++;
-        //printk(KERN_DEBUG "qdisc:%ld",i);
-		kfree_skb(skb);
-        list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
-        if(unlikely(contended))
-            spin_unlock(&q->busylock);
-		spin_unlock(root_lock);
-		return NET_XMIT_BACKOFF;
-	}
-
-    
+        
     /*if(q->q.qlen - qdisc_dev(q)->tx_queue_len < res && q->q.qlen > prev){
         if(q->q.qlen > prev){
             mark = true;
