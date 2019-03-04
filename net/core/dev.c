@@ -3169,91 +3169,120 @@ static unsigned long time_to_index(struct tw_queue *q, unsigned long time){
         return (time/q->granularity) % q->num_of_buckets;
 }
 
-static unsigned long get_min_index(void){
+static unsigned long get_min_next_time(void){
     unsigned long head_ts = qbackoff_queue->head_ts;
     unsigned long index = time_to_index(qbackoff_queue, qbackoff_queue->head_ts);
-    unsigned long index_max = time_to_index(qbackoff_queue, qbackoff_queue->max_ts);
-    while(!qbackoff_queue->main_buckets[index].qlen && index < index_max){
+    while(!qbackoff_queue->main_buckets[index].qlen && head_ts <= qbackoff_queue->max_ts){
         head_ts++;
         index = time_to_index(qbackoff_queue, head_ts);
     }
-    return index;
+    return head_ts;
 }
 
 
 enum hrtimer_restart tw_kick(struct hrtimer *timer){
-    unsigned long flags, next_index, start_index, now_index;
-    struct list_head *q, *n;
+    unsigned long flags, next_time, start_index, now_ts;
+    struct list_head *q;
     struct tcp_sock *tp;
-    LIST_HEAD(list);
 
     u64 now = ktime_get_ns();
+    now_ts = now;
 
     if(!qbackoff_queue->num_of_elements){
         qbackoff_queue->head_ts = now;
-        qbackoff_queue->main_ts = now;
         qbackoff_queue->max_ts = now + qbackoff_queue->horizon;
-        next_index = qbackoff_queue->horizon / qbackoff_queue->granularity;
+        next_time = qbackoff_queue->max_ts;
         goto forward;
     }
 
-    start_index = time_to_index(qbackoff_queue, qbackoff_queue->head_ts);
-    now_index = time_to_index(qbackoff_queue, now);
+    //printk(KERN_DEBUG "start:%lu max:%lu now:%lu now_t::%u", start_index, max_index, now_index, now);
+
+    if(now_ts > qbackoff_queue->max_ts)
+        now_ts = qbackoff_queue->max_ts;
+    if(now_ts < qbackoff_queue->head_ts)
+        now_ts = qbackoff_queue->head_ts;
 
     local_irq_save(flags);
-    while(!qbackoff_queue->main_buckets[start_index].qlen && start_index < now_index){
-        list_splice_init(&(qbackoff_queue->main_buckets[start_index].head), &list);
-
-        list_for_each_safe(q, n, &list){
-            tp = list_entry(q, struct tcp_sock, qbackoff_node);
-            qbackoff_add_tasklet(tp);
+    while(qbackoff_queue->head_ts <= now_ts){
+        start_index = time_to_index(qbackoff_queue, qbackoff_queue->head_ts);
+        if(qbackoff_queue->main_buckets[start_index].qlen){
+            list_for_each(q, &(qbackoff_queue->main_buckets[start_index].head)){
+                tp = list_entry(q, struct tcp_sock, qbackoff_node);
+                list_del(&tp->qbackoff_node);
+                clear_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+                //qbackoff_add_tasklet(tp);
+                qbackoff_queue->num_of_elements--;
+            }
         }
 
         qbackoff_queue->main_buckets[start_index].qlen = 0;
-        qbackoff_queue->num_of_elements--;
-
         qbackoff_queue->head_ts++;
         start_index = time_to_index(qbackoff_queue, qbackoff_queue->head_ts);
     }
-    next_index = get_min_index();
+
+    if(!qbackoff_queue->num_of_elements){
+        qbackoff_queue->head_ts = now;
+        qbackoff_queue->max_ts = now + qbackoff_queue->horizon;
+        next_time = qbackoff_queue->max_ts;
+        goto forward;
+    }
+    else
+        next_time = get_min_next_time();
+    
     
     local_irq_restore(flags);
 
+
 forward:
-    hrtimer_forward(tw_timer, ktime_get(), ktime_set(0, next_index * qbackoff_queue->granularity));
+    printk(KERN_DEBUG "forward:%lu next:%lu now:%lu", next_time, now);
+    hrtimer_forward(tw_timer, ktime_get(), ktime_set(0,  next_time - now));
     return HRTIMER_RESTART;
 }
 
 static void tw_enqueue(struct tcp_sock *tp){
+    
         u64 now = ktime_get_ns();
-        unsigned long next_time, index = 0, min_index = 0;;
+        u64 abs_expire = tp->qbackoff_expire + now;
+        unsigned long next_time, index = 0;
 
         if(!qbackoff_queue->num_of_elements){
             qbackoff_queue->head_ts = now;
-            qbackoff_queue->main_ts = now;
             qbackoff_queue->max_ts = now + qbackoff_queue->horizon;
         }
     
-        if(tp->qbackoff_expire < qbackoff_queue->head_ts)
-            tp->qbackoff_expire = qbackoff_queue->head_ts;
-        if(tp->qbackoff_expire > qbackoff_queue->max_ts)
-            tp->qbackoff_expire = qbackoff_queue->max_ts;
+        if(abs_expire < qbackoff_queue->head_ts)
+            abs_expire = qbackoff_queue->head_ts;
+        if(abs_expire > qbackoff_queue->max_ts)
+            abs_expire = qbackoff_queue->max_ts;
 
-        index = time_to_index(qbackoff_queue, tp->qbackoff_expire);
-        qbackoff_queue->num_of_elements++;
-
+        index = time_to_index(qbackoff_queue, abs_expire);
+        next_time = get_min_next_time();
+        
         //add to bucket
+        qbackoff_queue->num_of_elements++;
         list_add_tail(&tp->qbackoff_node, &(qbackoff_queue->main_buckets[index].head));
         qbackoff_queue->main_buckets[index].qlen++;
 
-        if(hrtimer_try_to_cancel(tw_timer) == -1)
-            return;
-
-        min_index = get_min_index();
-        next_time = min(min_index * qbackoff_queue->granularity, tp->qbackoff_expire);
-        hrtimer_init(tw_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-        tw_timer->function = tw_kick;
-        hrtimer_start(tw_timer, ktime_set(0, next_time), HRTIMER_MODE_REL);
+        printk(KERN_DEBUG "abs_expire:%lu next_time:%lu remain:%u", abs_expire, next_time, ktime_to_ns(__hrtimer_get_remaining(tw_timer, false)));
+        
+        if(!hrtimer_active(tw_timer)){
+            printk(KERN_DEBUG "not active");
+            next_time = abs_expire - now;
+            hrtimer_init(tw_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+            tw_timer->function = tw_kick;
+            hrtimer_start(tw_timer, ktime_set(0, next_time), HRTIMER_MODE_REL);
+        }
+        else if(abs_expire < next_time){
+            if(hrtimer_try_to_cancel(tw_timer) == -1){
+                printk(KERN_DEBUG "cancel fail");
+                return;
+            }
+            next_time = abs_expire - now;
+            printk(KERN_DEBUG "reset:%lu", next_time);
+            hrtimer_init(tw_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+            tw_timer->function = tw_kick;
+            hrtimer_start(tw_timer, ktime_set(0, next_time), HRTIMER_MODE_REL);
+        }
 }
 
 static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
@@ -3286,7 +3315,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
         //i++;
         //printk(KERN_DEBUG "qdisc:%ld",i);
 		kfree_skb(skb);
-        tp->qbackoff_expire = 100000;
+        tp->qbackoff_expire = 1000000;
         tw_enqueue(tp);
 		spin_unlock(root_lock);
         if(unlikely(contended))

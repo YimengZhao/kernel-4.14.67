@@ -3491,16 +3491,15 @@ static void __init tcp_init_mem(void)
 /* zym: timing wheel init */
 static int tw_init(void)
 {
-    u64 granularity = 10000;
+    u64 granularity = 100000;
     
-    u64 horizon = 10000000;
+    u64 horizon = 1000000000;
     u64 now = ktime_get_ns();
     int i = 0;
 
     qbackoff_queue = vmalloc(sizeof(struct tw_queue));
 
     qbackoff_queue->head_ts = now;
-    qbackoff_queue->main_ts = now;
     qbackoff_queue->max_ts = now + horizon;
 
     qbackoff_queue->horizon = horizon;
@@ -3517,7 +3516,7 @@ static int tw_init(void)
 
     tw_timer = vmalloc(sizeof(struct hrtimer));
     hrtimer_init(tw_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-    // tw_timer->function = tw_kick;
+    //tw_timer->function = tw_kick;
     //hrtimer_start(tw_timer, ktime_set(0, granularity), HRTIMER_MODE_REL);
     return 0;
 }

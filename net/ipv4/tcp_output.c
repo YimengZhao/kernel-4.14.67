@@ -933,10 +933,12 @@ void __init tcp_tasklet_init(void)
 void qbackoff_add_tasklet(struct tcp_sock *tp){
     struct sock *sk;
     unsigned long flags, nval, oval;
+    struct qbackoff_tasklet *qbackoff;
+    bool empty;
 
     sk = (struct sock *)tp;
 
-    for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
+    /*for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
         struct qbackoff_tasklet *qbackoff;
         bool empty;
 
@@ -958,8 +960,20 @@ void qbackoff_add_tasklet(struct tcp_sock *tp){
         if(empty)
             tasklet_schedule(&qbackoff->tasklet);
         break;
-    }
+    }*/
+    if(test_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags))
+        return;
 
+    clear_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+    set_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags);
+    set_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags);
+        
+    qbackoff = this_cpu_ptr(&qbackoff_tasklet);
+    empty = list_empty(&qbackoff->head);
+    list_add(&tp->qbackoff_node, &qbackoff->head);
+    if(empty)
+        tasklet_schedule(&qbackoff->tasklet);
+ 
 }
 
 /*
