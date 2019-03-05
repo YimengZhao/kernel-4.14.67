@@ -2295,7 +2295,8 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 				  unsigned int factor)
 {
 	unsigned int limit;
-	return false;    /* zym: disable tsq. */ 
+	//return false;    /* zym: disable tsq. */ 
+    struct tcp_sock *tp = tcp_sk(sk);
 
 	limit = max(2 * skb->truesize, sk->sk_pacing_rate >> 10);
 	limit = min_t(u32, limit, sysctl_tcp_limit_output_bytes);
@@ -2311,7 +2312,8 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 		    skb->prev == sk->sk_write_queue.next)
 			return false;
 
-		set_bit(TSQ_THROTTLED, &sk->sk_tsq_flags);
+		//set_bit(TSQ_THROTTLED, &sk->sk_tsq_flags);    /* zym */
+        set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
 		/* It is possible TX completion already happened
 		 * before we set TSQ_THROTTLED, so we must
 		 * test again the condition.
@@ -2460,14 +2462,17 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 
 		if (test_bit(TCP_TSQ_DEFERRED, &sk->sk_tsq_flags))
 			clear_bit(TCP_TSQ_DEFERRED, &sk->sk_tsq_flags);
-		if (tcp_small_queue_check(sk, skb, 0))
-			break;
+		/*if (tcp_small_queue_check(sk, skb, 0))
+			break;*/
 
 		/* zym : break if needs to back off */
         if (test_bit(QBACKOFF_DEFERRED, &tcp_sk(sk)->qbackoff_flags))
             clear_bit(QBACKOFF_DEFERRED, &tcp_sk(sk)->qbackoff_flags);
 
         if (test_bit(QBACKOFF_STOP, &tcp_sk(sk)->qbackoff_flags))
+            break;
+
+        if (tcp_small_queue_check(sk, skb, 0))
             break;
 
         if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
