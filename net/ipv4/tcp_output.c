@@ -931,6 +931,49 @@ void __init tcp_tasklet_init(void)
         INIT_LIST_HEAD(&qbackoff_head->head);
 }
 
+void qbackoff_add_tasklet(void){
+    LIST_HEAD(list);
+    struct tcp_sock *tp;
+    struct sock *sk;
+    unsigned long flags, nval, oval;
+    struct list_head *q, *n;
+    struct qbackoff_tasklet *qbackoff;
+    bool empty;
+
+    local_irq_save(flags);
+    list_splice_init(&qbackoff_head->head, &list);
+    local_irq_restore(flags);
+
+    list_for_each_safe(q, n, &list){
+        tp = list_entry(q, struct tcp_sock, qbackoff_node);
+        sk = (struct sock*)tp;
+        for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
+            /*if(oval & QBACKOFF_QUEUED_B){
+                sk_free(sk);
+                break;
+            }*/
+            nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
+            nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
+
+            if(nval != oval)
+                continue;
+            break;
+        }
+        break;
+        //list_del(&tp->qbackoff_node);
+
+        /*local_irq_save(flags);
+        qbackoff = this_cpu_ptr(&qbackoff_tasklet);
+        empty = list_empty(&list);
+        list_add(&tp->qbackoff_node, &qbackoff->head);
+        if(empty)
+            tasklet_schedule(&qbackoff->tasklet);
+        local_irq_restore(flags);
+        break;*/
+    }
+    
+}
+
 
 /*
  * Write buffer destructor automatically called from kfree_skb.
@@ -962,7 +1005,7 @@ void tcp_wfree(struct sk_buff *skb)
     /*if(test_bit(QBACKOFF_STOP, &tp->qbackoff_flags))
         goto out;*/
 
-    for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
+    /*for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
         struct qbackoff_tasklet *qbackoff;
         bool empty;
 
@@ -984,7 +1027,7 @@ void tcp_wfree(struct sk_buff *skb)
             tasklet_schedule(&qbackoff->tasklet);
         local_irq_restore(flags);
         return;
-    }
+    }*/
 
 	/*for (oval = READ_ONCE(sk->sk_tsq_flags);; oval = nval) {
 		struct tsq_tasklet *tsq;
@@ -1008,7 +1051,7 @@ void tcp_wfree(struct sk_buff *skb)
 		return;
 	}*/
     /* zym */
-    //qbackoff_add_tasklet();
+    qbackoff_add_tasklet();
 out:
 	sk_free(sk);
 }
