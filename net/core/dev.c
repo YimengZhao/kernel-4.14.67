@@ -3208,7 +3208,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
         //i++;
         //printk(KERN_DEBUG "qdisc:%ld",i);
 		//kfree_skb(skb);
-        qbackoff_free_skb(skb);
+        //qbackoff_free_skb(skb);
         if(unlikely(contended))
             spin_unlock(&q->busylock);
         spin_unlock(root_lock);

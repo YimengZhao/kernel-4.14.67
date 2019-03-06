@@ -1238,6 +1238,7 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
     //tcp_qbackoff_reset_timer(sk);
     if(err == NET_XMIT_BACKOFF){
         set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+        kfree_skb(skb);
     }
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
 		tcp_enter_cwr(sk);
