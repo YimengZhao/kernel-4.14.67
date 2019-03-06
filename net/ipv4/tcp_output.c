@@ -865,6 +865,7 @@ struct qbackoff_tasklet {
     struct list_head        head;
 };
 static DEFINE_PER_CPU(struct qbackoff_tasklet, qbackoff_tasklet);
+spinlock_t *qbackoff_lock;
 
 
 /* zym : similar to tsq_tasklet_func */
@@ -929,6 +930,7 @@ void __init tcp_tasklet_init(void)
     INIT_LIST_HEAD(&qbackoff_head->head);
     if(qbackoff_head)
         INIT_LIST_HEAD(&qbackoff_head->head);
+    qbackoff_lock = kmalloc(sizeof(spinlock_t), GFP_KERNEL);
 }
 
 void qbackoff_add_tasklet(void){
@@ -940,18 +942,20 @@ void qbackoff_add_tasklet(void){
     struct qbackoff_tasklet *qbackoff;
     bool empty;
 
-    local_irq_save(flags);
+    spin_lock(&qbackoff_lock);
+    //local_irq_save(flags);
     list_splice_init(&qbackoff_head->head, &list);
-    local_irq_restore(flags);
+    //local_irq_restore(flags);
+    spin_unlock(&qbackoff_lock);
 
     list_for_each_safe(q, n, &list){
         tp = list_entry(q, struct tcp_sock, qbackoff_node);
         sk = (struct sock*)tp;
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
-            /*if(oval & QBACKOFF_QUEUED_B){
+            if(oval & QBACKOFF_QUEUED_B){
                 sk_free(sk);
                 break;
-            }*/
+            }
             nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
 
@@ -959,7 +963,7 @@ void qbackoff_add_tasklet(void){
                 continue;
             break;
         }
-        break;
+        //break;
         //list_del(&tp->qbackoff_node);
 
         /*local_irq_save(flags);
