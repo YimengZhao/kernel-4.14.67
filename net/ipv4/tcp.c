@@ -310,6 +310,9 @@ EXPORT_SYMBOL(tcp_sockets_allocated);
 struct qbackoff_list *qbackoff_head;
 EXPORT_SYMBOL(qbackoff_head);
 
+spinlock_t *qbackoff_lock;
+EXPORT_SYMBOL(qbackoff_lock);
+
 /*
  * TCP splice context
  */
