@@ -931,6 +931,7 @@ void __init tcp_tasklet_init(void)
     if(qbackoff_head)
         INIT_LIST_HEAD(&qbackoff_head->head);
     qbackoff_lock = kmalloc(sizeof(spinlock_t), GFP_KERNEL);
+    spin_lock_init(qbackoff_lock);
 }
 
 void qbackoff_add_tasklet(void){
