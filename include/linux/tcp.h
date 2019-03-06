@@ -367,6 +367,7 @@ struct tcp_sock {
 /* zym: qbackoff*/
     struct hrtimer qbackoff_timer;
     struct list_head qbackoff_node;
+    struct list_head qbackoff_global_node;
     unsigned long qbackoff_flags;
 };
 

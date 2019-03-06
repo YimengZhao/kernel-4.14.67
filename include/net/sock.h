@@ -478,8 +478,6 @@ struct sock {
 	struct sock_reuseport __rcu	*sk_reuseport_cb;
 	struct rcu_head		sk_rcu;
 
-    /* zym: qbackoff parameters */
-    long qbackoff_expire;
 };
 
 enum sk_pacing {

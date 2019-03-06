@@ -306,12 +306,13 @@ EXPORT_SYMBOL(tcp_memory_allocated);
 struct percpu_counter tcp_sockets_allocated;
 EXPORT_SYMBOL(tcp_sockets_allocated);
 
-/* zym */
-struct qbackoff_list *qbackoff_head;
-EXPORT_SYMBOL(qbackoff_head);
+/* zym: global list of stopped tcp sock */
+struct qbackoff_list *qbackoff_global_list;
+EXPORT_SYMBOL(qbackoff_global_list);
 
-spinlock_t *qbackoff_lock;
-EXPORT_SYMBOL(qbackoff_lock);
+/* global lock for qbackoff_global_list*/
+spinlock_t *qbackoff_global_lock;
+EXPORT_SYMBOL(qbackoff_global_lock);
 
 /*
  * TCP splice context
@@ -423,6 +424,7 @@ void tcp_init_sock(struct sock *sk)
 	tcp_init_xmit_timers(sk);
 	INIT_LIST_HEAD(&tp->tsq_node);
 
+    INIT_LIST_HEAD(&tp->qbackoff_global_node);
     INIT_LIST_HEAD(&tp->qbackoff_node);     /* zym */
     set_bit(QBACKOFF_NONE, &tp->qbackoff_flags);
 
