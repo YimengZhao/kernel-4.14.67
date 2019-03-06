@@ -948,14 +948,14 @@ void qbackoff_add_tasklet(void){
     //local_irq_restore(flags);
     spin_unlock(&qbackoff_lock);
 
-    list_for_each_safe(q, n, &list){
+    /*list_for_each_safe(q, n, &list){
         tp = list_entry(q, struct tcp_sock, qbackoff_node);
         sk = (struct sock*)tp;
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
-            /*if(oval & QBACKOFF_QUEUED_B){
+            if(oval & QBACKOFF_QUEUED_B){
                 sk_free(sk);
                 break;
-            }*/
+            }
             nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
 
@@ -966,15 +966,15 @@ void qbackoff_add_tasklet(void){
         //break;
         list_del(&tp->qbackoff_node);
         sk_free(sk);
-        /*local_irq_save(flags);
+        local_irq_save(flags);
         qbackoff = this_cpu_ptr(&qbackoff_tasklet);
         empty = list_empty(&list);
         list_add(&tp->qbackoff_node, &qbackoff->head);
         if(empty)
             tasklet_schedule(&qbackoff->tasklet);
         local_irq_restore(flags);
-        break;*/
-    }
+        break;
+    }*/
     
 }
 
