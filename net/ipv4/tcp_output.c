@@ -883,7 +883,10 @@ static void qbackoff_tasklet_func(unsigned long data)
 
     list_for_each_safe(q, n, &list){
         tp = list_entry(q, struct tcp_sock, qbackoff_node);
+        bh_lock_sock(sk);
         list_del(&tp->qbackoff_node);
+        INIT_LIST_HEAD(&(tp->qbackoff_node));
+        bh_unlock_sock(sk);
 
         sk = (struct sock *)tp;
         smp_mb__before_atomic();
@@ -942,40 +945,42 @@ void qbackoff_add_tasklet(void){
     struct qbackoff_tasklet *qbackoff;
     bool empty;
 
-    spin_lock_irqsave(qbackoff_lock, flags);
-    //local_irq_save(flags);
-    list_splice_init(&qbackoff_head->head, &list);
-    //local_irq_restore(flags);
-    spin_unlock_irqrestore(qbackoff_lock, flags);
+    //spin_lock_irqsave(qbackoff_lock, flags);
+    //list_splice_init(&qbackoff_head->head, &list);
+    //spin_unlock_irqrestore(qbackoff_lock, flags);
 
-    list_for_each_safe(q, n, &list){
+    //iterate over every element (tcp_sock) in the global list. If tp is not in the tasklet list, add it to the tasklet list
+    spin_lock_irqsave(qbackoff_lock, flags);
+    list_for_each_safe(q, n, &qbackoff_head->head){
         tp = list_entry(q, struct tcp_sock, qbackoff_node);
         sk = (struct sock*)tp;
+        
+        //clear STOP bit: resume tcp
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
-            /*if(oval & QBACKOFF_QUEUED_B){
-                sk_free(sk);
-                break;
-            }*/
-            nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_QUEUED_B | QBACKOFF_DEFERRED_B;
+            
+            nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_DEFERRED_B;
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
 
             if(nval != oval)
                 continue;
             break;
         }
-        //break;
         list_del(&tp->qbackoff_node);
-        //sk_free(sk);
-        /*local_irq_save(flags);
+        //set prev and next pointer of tp->qbackoff_node) to itself. list_empty() should return true after init_list_head.
+        //in the qdisc, before push tp to the global list, we use list_empty() to check whether the tp is already in the global list
+        INIT_LIST_HEAD(&(tp->qbackoff_node));
+        
+        /*
+        local_irq_save(flags);
         qbackoff = this_cpu_ptr(&qbackoff_tasklet);
-        empty = list_empty(&list);
+        empty = list_empty(&qbackoff->head);
         list_add(&tp->qbackoff_node, &qbackoff->head);
         if(empty)
             tasklet_schedule(&qbackoff->tasklet);
-        local_irq_restore(flags);
-        break;*/
+        local_irq_restore(flags);*/
+        //break;
     }
-    
+    spin_unlock_irqrestore(qbackoff_lock, flags);
 }
 
 
@@ -1284,7 +1289,7 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
     //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
     //tcp_qbackoff_reset_timer(sk);
     if(err == NET_XMIT_BACKOFF){
-        set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+        //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
     }
 	if (unlikely(err > 0 && err != NET_XMIT_BACKOFF)) {
 		tcp_enter_cwr(sk);
@@ -2342,7 +2347,7 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 				  unsigned int factor)
 {
 	unsigned int limit;
-	//return false;    /* zym: disable tsq. */ 
+	return false;    /* zym: disable tsq. */ 
     struct tcp_sock *tp = tcp_sk(sk);
 
 	limit = max(2 * skb->truesize, sk->sk_pacing_rate >> 10);
@@ -2360,8 +2365,9 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 			return false;
 
 		//set_bit(TSQ_THROTTLED, &sk->sk_tsq_flags);    /* zym */
-        set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
-		/* It is possible TX completion already happened
+        //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+		
+        /* It is possible TX completion already happened
 		 * before we set TSQ_THROTTLED, so we must
 		 * test again the condition.
 		 */

@@ -2985,7 +2985,6 @@ static int xmit_one(struct sk_buff *skb, struct net_device *dev,
 		dev_queue_xmit_nit(skb, dev);
 
 	len = skb->len;
-    //printk(KERN_DEBUG "skb len: %d", len); /* zym: debug*/
 	trace_net_dev_start_xmit(skb, dev);
 	rc = netdev_start_xmit(skb, dev, txq, more);
 	trace_net_dev_xmit(skb, rc, dev, len);
@@ -3019,7 +3018,6 @@ struct sk_buff *dev_hard_start_xmit(struct sk_buff *first, struct net_device *de
 	}
 
 out:
-    //printk(KERN_DEBUG "skb num: %d", i); /* zym: debug */
 	*ret = rc;
 	return skb;
 }
@@ -3205,15 +3203,38 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
 	spin_lock(root_lock);
 
+    /* zym: check if qdisc is full */
     if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
         //i++;
         //printk(KERN_DEBUG "qdisc:%ld",i);
-		//kfree_skb(skb);
         qbackoff_free_skb(skb);
+
+        //if list head is not empty (tp is in either global list or tasklet list), no op
+        if(!list_empty(&tp->qbackoff_node)){
+            goto exit;
+        }
+
+       
+        //set tp->qbackoff_flags to QBACKOFF_STOP
+        unsigned long flags, nval, oval;
+        for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
+            /*if(oval & QBACKOFF_QUEUED_B){
+                goto exit;
+            }*/
+            nval = oval & QBACKOFF_STOP;
+            nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
+                        
+            if(nval != oval)
+                continue;
+            break;
+        }
+       
+        //add tp to the global list
         spin_lock_irqsave(qbackoff_lock, flags);
-        list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
+        list_add(&tp->qbackoff_node, &qbackoff_head->head);
         spin_unlock_irqrestore(qbackoff_lock, flags);
-        if(unlikely(contended))
+
+exit:   if(unlikely(contended))
             spin_unlock(&q->busylock);
         spin_unlock(root_lock);
 		return NET_XMIT_BACKOFF;
