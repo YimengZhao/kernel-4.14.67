@@ -3179,6 +3179,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
     struct tcp_sock *tp = tcp_sk(skb->sk);
 
     bool mark = false;
+    unsigned long flags;
     
     /* zym: need to free skb here to keep the correct number of reference on the skb */
     /*if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
@@ -3209,9 +3210,9 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
         //printk(KERN_DEBUG "qdisc:%ld",i);
 		//kfree_skb(skb);
         qbackoff_free_skb(skb);
-        spin_lock(qbackoff_lock);
+        spin_lock_irqsave(qbackoff_lock, flags);
         list_add_tail(&tp->qbackoff_node, &qbackoff_head->head);
-        spin_unlock(qbackoff_lock);
+        spin_unlock_irqrestore(qbackoff_lock, flags);
         if(unlikely(contended))
             spin_unlock(&q->busylock);
         spin_unlock(root_lock);
