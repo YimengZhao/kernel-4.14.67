@@ -3210,20 +3210,16 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
         qbackoff_free_skb(skb);
         //kfree_skb(skb);
 
-        //if list head is not empty (tp is in either global list or tasklet list), no op
-        if(!list_empty(&tp->qbackoff_global_node)){
-            sk_free(skb->sk);
-            goto exit;
-        }
-
-       
-        //set tp->qbackoff_flags to QBACKOFF_STOP
+        //check flags
         unsigned long flags, nval, oval;
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
-            /*if(oval & QBACKOFF_QUEUED_B){
+            //if tp is already in the global list, return
+            if(oval & QBACKOFF_GLOBAL_QUEUED_B){
                 goto exit;
-            }*/
-            nval = oval & QBACKOFF_STOP;
+            }
+
+            //stop the flow. set the QBACKOFF_QUEUED bit
+            nval = (oval & QBACKOFF_STOP_B) | QBACKOFF_GLOBAL_QUEUED_B;
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
                         
             if(nval != oval)
