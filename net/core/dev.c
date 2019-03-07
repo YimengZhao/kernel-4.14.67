@@ -3212,6 +3212,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
         //if list head is not empty (tp is in either global list or tasklet list), no op
         if(!list_empty(&tp->qbackoff_global_node)){
+            sk_free(skb->sk);
             goto exit;
         }
 

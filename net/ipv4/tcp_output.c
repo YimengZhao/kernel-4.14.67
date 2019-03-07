@@ -890,17 +890,17 @@ static void qbackoff_tasklet_func(unsigned long data)
         smp_mb__before_atomic();
         //clear_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags);
 
-        /*if(!sk->sk_lock.owned &&
+        if(!sk->sk_lock.owned &&
            test_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags)){
             bh_lock_sock(sk);
-            if(!sock_owned_by_user(sk)){
+            /*if(!sock_owned_by_user(sk)){
                 clear_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags);
                 tcp_tsq_handler(sk);
-            }
+            }*/
             bh_unlock_sock(sk);
         }
 
-        sk_free(sk);*/
+        sk_free(sk);
     }
 }
 
