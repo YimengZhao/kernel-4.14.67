@@ -3193,7 +3193,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
 	spin_lock(root_lock);
 
-    /*if(tp){
+    if(tp){
         unsigned int limit;
         struct sock *sk = skb->sk;
         limit = max(2 * skb->truesize, sk->sk_pacing_rate >> 10);
@@ -3203,7 +3203,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
                 goto backoff;
             }
         }
-    }*/
+    }
 
     /* zym: check if qdisc is full */
     if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){

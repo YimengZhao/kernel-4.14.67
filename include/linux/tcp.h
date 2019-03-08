@@ -397,7 +397,8 @@ enum qbackoff_enum {
     QBACKOFF_TASKLET_QUEUED,
     QBACKOFF_DEFERRED,
     QBACKOFF_STOP,
-    QBACKOFF_TSQ,  
+    QBACKOFF_TSQ,
+    QBACKOFF_ACTIVE,
     QBACKOFF_NONE,
 };
 
@@ -407,6 +408,7 @@ enum qbackoff_flags {
     QBACKOFF_DEFERRED_B = (1UL << QBACKOFF_DEFERRED),
     QBACKOFF_STOP_B = (1UL << QBACKOFF_STOP),
     QBACKOFF_TSQ_B = (1UL << QBACKOFF_TSQ),
+    QBACKOFF_ACTIVE_B = (1UL << QBACKOFF_ACTIVE),
 };
 
 static inline struct tcp_sock *tcp_sk(const struct sock *sk)
