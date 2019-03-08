@@ -670,6 +670,8 @@ void qbackoff_free_skb(struct sk_buff *skb)
 
     skb_dst_drop(skb);
     secpath_reset(skb);
+    struct sock *sk = skb->sk;
+    refcount_sub_and_test(skb->truesize - 1, &sk->sk_wmem_alloc);
 #if IS_ENABLED(CONFIG_NF_CONNTRACK)
     nf_conntrack_put(skb_nfct(skb));
 #endif
