@@ -3179,17 +3179,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
     bool mark = false;
     unsigned long flags;
     
-    /* zym: need to free skb here to keep the correct number of reference on the skb */
-    /*if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
-        //i++;
-        //printk(KERN_DEBUG "qdisc:%ld",i);
-		//kfree_skb(skb);
-        qbackoff_free_skb(skb);
-		return NET_XMIT_BACKOFF;
-	}*/
     
-
-
 	qdisc_calculate_pkt_len(skb, q);
 	/*
 	 * Heuristic to force contended enqueues to serialize on a
@@ -3203,13 +3193,28 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
 	spin_lock(root_lock);
 
+    /*if(tp){
+        unsigned int limit;
+        struct sock *sk = skb->sk;
+        limit = max(2 * skb->truesize, sk->sk_pacing_rate >> 10);
+        limit = min_t(u32, limit, sysctl_tcp_limit_output_bytes);
+        if (refcount_read(&sk->sk_wmem_alloc) > limit) {
+            if (skb != sk->sk_write_queue.next && skb->prev != sk->sk_write_queue.next){
+                goto backoff;
+            }
+        }
+    }*/
+
     /* zym: check if qdisc is full */
     if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
         //i++;
         //printk(KERN_DEBUG "qdisc:%ld",i);
+backoff:        
         qbackoff_free_skb(skb);
         //kfree_skb(skb);
 
+        if(!tp)
+            goto exit;
         //check flags
         unsigned long flags, nval, oval;
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
@@ -3229,7 +3234,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
        
         //add tp to the global list
         spin_lock_irqsave(qbackoff_global_lock, flags);
-        list_add(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+        list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
         spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
 exit:   if(unlikely(contended))

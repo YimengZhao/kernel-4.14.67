@@ -945,7 +945,7 @@ void qbackoff_add_tasklet(void){
     spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
     //iterate over every element (tcp_sock) in the global list. If tp is not in the tasklet list, add it to the tasklet list
-    list_for_each_safe(q, n, &qbackoff_global_list->head){
+    list_for_each_safe(q, n, &list){
         tp = list_entry(q, struct tcp_sock, qbackoff_global_node);
         sk = (struct sock*)tp;
         
@@ -955,11 +955,11 @@ void qbackoff_add_tasklet(void){
         bool tasklet_queued = false;
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
             if(oval & QBACKOFF_TASKLET_QUEUED_B){
-                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B;
+                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B | ~QBACKOFF_TSQ;
                 tasklet_queued = true;
             }
             else{
-                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B | QBACKOFF_TASKLET_QUEUED_B | QBACKOFF_DEFERRED_B;
+                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B | QBACKOFF_TASKLET_QUEUED_B | QBACKOFF_DEFERRED_B | ~QBACKOFF_TSQ;
             }
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
 
@@ -981,7 +981,7 @@ void qbackoff_add_tasklet(void){
         else{
             sk_free(sk);
         }
-        //break;
+        break;
     }
 }
 
@@ -2367,15 +2367,9 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 			return false;
 
 		//set_bit(TSQ_THROTTLED, &sk->sk_tsq_flags);    /* zym */
-        set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
-        if(!test_bit(QBACKOFF_GLOBAL_QUEUED, &tp->qbackoff_flags)){
-            set_bit(QBACKOFF_GLOBAL_QUEUED, &tp->qbackoff_flags);
-            
-            spin_lock_irqsave(qbackoff_global_lock, flags);
-            list_add(&tp->qbackoff_global_node, &qbackoff_global_list->head);
-            spin_unlock_irqrestore(qbackoff_global_lock, flags);
-        }
-		
+        set_bit(QBACKOFF_TSQ, &tp->qbackoff_flags);
+        return false;   /* need to return false becaues we need the skb arrive at the qdisc and the qdisc will add the tp to the global list*/
+       
         /* It is possible TX completion already happened
 		 * before we set TSQ_THROTTLED, so we must
 		 * test again the condition.
