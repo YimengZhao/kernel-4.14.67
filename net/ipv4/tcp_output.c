@@ -945,7 +945,7 @@ void qbackoff_add_tasklet(void){
     spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
     //iterate over every element (tcp_sock) in the global list. If tp is not in the tasklet list, add it to the tasklet list
-    list_for_each_safe(q, n, &qbackoff_global_list->head){
+    list_for_each_safe(q, n, &list){
         tp = list_entry(q, struct tcp_sock, qbackoff_global_node);
         sk = (struct sock*)tp;
         
@@ -981,7 +981,7 @@ void qbackoff_add_tasklet(void){
         else{
             sk_free(sk);
         }
-        //break;
+        break;
     }
 }
 

@@ -3204,7 +3204,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	spin_lock(root_lock);
 
     /* zym: check if qdisc is full */
-    if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
+    if(tp && q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
         //i++;
         //printk(KERN_DEBUG "qdisc:%ld",i);
         qbackoff_free_skb(skb);
@@ -3215,6 +3215,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
             //if tp is already in the global list, return
             if(oval & QBACKOFF_GLOBAL_QUEUED_B){
+                sk_free(skb->sk);
                 goto exit;
             }
 
@@ -3229,7 +3230,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
        
         //add tp to the global list
         spin_lock_irqsave(qbackoff_global_lock, flags);
-        list_add(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+        list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
         spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
 exit:   if(unlikely(contended))
