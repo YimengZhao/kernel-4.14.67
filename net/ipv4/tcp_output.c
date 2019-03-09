@@ -955,11 +955,11 @@ void qbackoff_add_tasklet(void){
         bool tasklet_queued = false;
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
             if(oval & QBACKOFF_TASKLET_QUEUED_B){
-                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B | ~QBACKOFF_TSQ;
+                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B | ~QBACKOFF_TSQ | ~QBACKOFF_ACTIVE;
                 tasklet_queued = true;
             }
             else{
-                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B | QBACKOFF_TASKLET_QUEUED_B | QBACKOFF_DEFERRED_B | ~QBACKOFF_TSQ;
+                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B | QBACKOFF_TASKLET_QUEUED_B | QBACKOFF_DEFERRED_B | ~QBACKOFF_TSQ | ~QBACKOFF_ACTIVE;
             }
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
 
@@ -2525,8 +2525,9 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
         if (test_bit(QBACKOFF_DEFERRED, &tcp_sk(sk)->qbackoff_flags))
             clear_bit(QBACKOFF_DEFERRED, &tcp_sk(sk)->qbackoff_flags);
 
-        if (test_bit(QBACKOFF_STOP, &tcp_sk(sk)->qbackoff_flags))
+        if (test_bit(QBACKOFF_STOP, &tcp_sk(sk)->qbackoff_flags)){
             break;
+        }
 
         if (tcp_small_queue_check(sk, skb, 0))
             break;

@@ -426,7 +426,7 @@ void tcp_init_sock(struct sock *sk)
 
     INIT_LIST_HEAD(&tp->qbackoff_global_node);
     INIT_LIST_HEAD(&tp->qbackoff_node);     /* zym */
-    set_bit(QBACKOFF_NONE, &tp->qbackoff_flags);
+    set_bit(QBACKOFF_ACTIVE, &tp->qbackoff_flags);
 
 	icsk->icsk_rto = TCP_TIMEOUT_INIT;
 	tp->mdev_us = jiffies_to_usecs(TCP_TIMEOUT_INIT);

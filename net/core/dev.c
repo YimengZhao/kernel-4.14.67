@@ -3218,30 +3218,72 @@ backoff:
         //check flags
         unsigned long flags, nval, oval;
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
-            //if tp is already in the global list, return
+            //if tp is already in the global list, return (do not insert in the global list again)
             if(oval & QBACKOFF_GLOBAL_QUEUED_B){
                 goto exit;
             }
-
+            
             //stop the flow. set the QBACKOFF_QUEUED bit
             nval = (oval & QBACKOFF_STOP_B) | QBACKOFF_GLOBAL_QUEUED_B;
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
                         
             if(nval != oval)
                 continue;
-            break;
+
+            //if QBACKOFF_ACTIVE is set, insert to the tail of the globa list; otherwise insert to the head of the global list
+            if(oval & QBACKOFF_ACTIVE)
+                goto insert_tail;
+            else
+                goto insert_head;
         }
        
         //add tp to the global list
+insert_tail:
         spin_lock_irqsave(qbackoff_global_lock, flags);
         list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
         spin_unlock_irqrestore(qbackoff_global_lock, flags);
+
+insert_head:
+        spin_lock_irqsave(qbackoff_global_lock, flags);
+        list_add(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+        spin_unlock_irqrestore(qbackoff_global_lock, flags);
+
 
 exit:   if(unlikely(contended))
             spin_unlock(&q->busylock);
         spin_unlock(root_lock);
 		return NET_XMIT_BACKOFF;
 	}
+
+    if(!list_empty(&qbackoff_global_list->head)){
+        if(tp && test_bit(QBACKOFF_ACTIVE, &tp->qbackoff_flags)){
+            qbackoff_free_skb(skb);
+            unsigned long flags, nval, oval;
+            for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
+                //if tp is already in the global list, return (do not insert in the global list again)
+                if(oval & QBACKOFF_GLOBAL_QUEUED_B){
+                    break;
+                }
+            
+                //stop the flow. set the QBACKOFF_QUEUED bit
+                nval = (oval & QBACKOFF_STOP_B) | QBACKOFF_GLOBAL_QUEUED_B;
+                nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
+                        
+                if(nval != oval)
+                continue;
+            }
+            spin_lock_irqsave(qbackoff_global_lock, flags);
+            list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+            spin_unlock_irqrestore(qbackoff_global_lock, flags);
+
+            if(unlikely(contended))
+                spin_unlock(&q->busylock);
+            spin_unlock(root_lock);
+            return NET_XMIT_BACKOFF;
+        }
+    }
+
+    
         
     /*if(q->q.qlen - qdisc_dev(q)->tx_queue_len < res && q->q.qlen > prev){
         if(q->q.qlen > prev){
