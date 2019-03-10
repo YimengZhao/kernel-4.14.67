@@ -955,11 +955,11 @@ void qbackoff_add_tasklet(void){
         bool tasklet_queued = false;
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
             if(oval & QBACKOFF_TASKLET_QUEUED_B){
-                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B;
+                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B | QBACKOFF_RELEASE_B;
                 tasklet_queued = true;
             }
             else{
-                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B | QBACKOFF_TASKLET_QUEUED_B | QBACKOFF_DEFERRED_B;
+                nval = (oval & ~QBACKOFF_STOP_B) | ~QBACKOFF_GLOBAL_QUEUED_B | QBACKOFF_TASKLET_QUEUED_B | QBACKOFF_DEFERRED_B | QBACKOFF_RELEASE_B;
             }
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
 
@@ -977,9 +977,6 @@ void qbackoff_add_tasklet(void){
             if(empty)
                 tasklet_schedule(&qbackoff->tasklet);
             local_irq_restore(flags);
-        }
-        else{
-            sk_free(sk);
         }
         break;
     }
