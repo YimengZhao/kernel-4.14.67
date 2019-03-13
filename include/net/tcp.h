@@ -828,7 +828,8 @@ struct tcp_skb_cb {
 	__u8		txstamp_ack:1,	/* Record TX timestamp for ack? */
 			eor:1,		/* Is skb MSG_EOR marked? */
 			has_rxtstamp:1,	/* SKB has a RX timestamp	*/
-			unused:5;
+            qbackoff_skb_pushed:5;   /* zym: SKB has been pushed to write_list and skb->size has been added to sk_wmem_alloc */
+			//unused:4;
 	__u32		ack_seq;	/* Sequence number ACK'd	*/
 	union {
 		struct {
@@ -856,10 +857,10 @@ struct tcp_skb_cb {
 			void *data_end;
 		} bpf;
 	};
+
 };
 
 #define TCP_SKB_CB(__skb)	((struct tcp_skb_cb *)&((__skb)->cb[0]))
-
 
 #if IS_ENABLED(CONFIG_IPV6)
 /* This is the variant of inet6_iif() that must be used by TCP,

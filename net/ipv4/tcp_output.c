@@ -1164,12 +1164,13 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 		TCP_SKB_CB(skb)->tx.in_flight = TCP_SKB_CB(skb)->end_seq
 			- tp->snd_una;
 		oskb = skb;
-		if (unlikely(skb_cloned(skb)))
-			skb = pskb_copy(skb, gfp_mask);
-		else
-			skb = skb_clone(skb, gfp_mask);
-		if (unlikely(!skb))
-			return -ENOBUFS;
+		    
+        if (unlikely(skb_cloned(skb)))
+	        skb = pskb_copy(skb, gfp_mask);
+	    else
+		    skb = skb_clone(skb, gfp_mask);
+	    if (unlikely(!skb))
+		    return -ENOBUFS;
 	}
 	skb->skb_mstamp = tp->tcp_mstamp;
 
@@ -1207,8 +1208,11 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	skb->sk = sk;
 	skb->destructor = skb_is_tcp_pure_ack(skb) ? __sock_wfree : tcp_wfree;
 	skb_set_hash_from_sk(skb, sk);
-	refcount_add(skb->truesize, &sk->sk_wmem_alloc);
 
+    /* zym: check if this skb is 'queued' because qdisc is full */
+    //printk(KERN_DEBUG "skb_size: %ld", sizeof(struct sk_buff));
+	refcount_add(skb->truesize, &sk->sk_wmem_alloc);
+        
 	skb_set_dst_pending_confirm(skb, sk->sk_dst_pending_confirm);
 
 	/* Build TCP header and checksum it. */
@@ -2345,7 +2349,7 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 				  unsigned int factor)
 {
 	unsigned int limit;
-	return false;    /* zym: disable tsq. */ 
+	//return false;    /* zym: disable tsq. */ 
     struct tcp_sock *tp = tcp_sk(sk);
     unsigned long flags;
 
@@ -2364,14 +2368,17 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 			return false;
 
 		//set_bit(TSQ_THROTTLED, &sk->sk_tsq_flags);    /* zym */
+        if(test_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags))
+            return false;
         set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
         if(!test_bit(QBACKOFF_GLOBAL_QUEUED, &tp->qbackoff_flags)){
             set_bit(QBACKOFF_GLOBAL_QUEUED, &tp->qbackoff_flags);
             
             spin_lock_irqsave(qbackoff_global_lock, flags);
-            list_add(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+            list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
             spin_unlock_irqrestore(qbackoff_global_lock, flags);
         }
+
 		
         /* It is possible TX completion already happened
 		 * before we set TSQ_THROTTLED, so we must
