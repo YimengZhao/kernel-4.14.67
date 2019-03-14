@@ -3203,7 +3203,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
             struct tcp_skb_cb *tcb;
             tcb = TCP_SKB_CB(fskb);
             if(tcb)
-                tcb->qbackoff_skb_pushed++;
+                tcb->qbackoff_skb_pushed=1;
         }
 
 
@@ -3257,12 +3257,12 @@ exit:
 		return NET_XMIT_BACKOFF;
 	}
     
-#if 0     
+ 
     if(tp){
         //i++;
         //printk(KERN_DEBUG "set qbackoff_pushed");
         if(!test_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags) && !list_empty(&qbackoff_global_list->head)){
-            /*struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
+            struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
             struct sk_buff *fskb;
             if(fclones){
                 fskb = &fclones->skb1;
@@ -3270,7 +3270,7 @@ exit:
                 tcb = TCP_SKB_CB(fskb);
                 if(tcb)
                     tcb->qbackoff_skb_pushed++;
-            }*/
+            }
 
 
             qbackoff_free_skb(skb);
@@ -3306,7 +3306,7 @@ exit_1:
 		    return NET_XMIT_BACKOFF;
         }
 	}
-#endif
+
 
     if(tp){
         struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
@@ -3316,10 +3316,6 @@ exit_1:
             struct tcp_skb_cb *tcb;
             tcb = TCP_SKB_CB(fskb);
             if(tcb){
-                int stopped_num = tcb->qbackoff_skb_pushed - 1;
-                if(stopped_num < 0)
-                    stopped_num = 0;
-                //refcount_sub_and_test(skb->truesize * stopped_num, &skb->sk->sk_wmem_alloc);
                 tcb->qbackoff_skb_pushed = 0;
             }
         }

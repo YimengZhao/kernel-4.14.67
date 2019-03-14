@@ -1060,6 +1060,8 @@ void tcp_wfree(struct sk_buff *skb)
     /* zym */
     qbackoff_add_tasklet();
 out:
+    if(test_bit(QBACKOFF_GLOBAL_QUEUED, &tp->qbackoff_flags) || test_bit(QBACKOFF_TASKLET_QUEUED, &tp->qbackoff_flags));
+        return;
 	sk_free(sk);
 }
 
@@ -1211,7 +1213,8 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 
     /* zym: check if this skb is 'queued' because qdisc is full */
     //printk(KERN_DEBUG "skb_size: %ld", sizeof(struct sk_buff));
-	refcount_add(skb->truesize, &sk->sk_wmem_alloc);
+    if(tcb->qbackoff_skb_pushed == 0)
+	    refcount_add(skb->truesize, &sk->sk_wmem_alloc);
         
 	skb_set_dst_pending_confirm(skb, sk->sk_dst_pending_confirm);
 
