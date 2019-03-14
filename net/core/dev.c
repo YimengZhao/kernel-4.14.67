@@ -3259,7 +3259,7 @@ exit:
 	}
     
  
-    if(tp){
+    /*if(tp){
         //i++;
         //printk(KERN_DEBUG "set qbackoff_pushed");
         if(skb != skb->sk->sk_write_queue.next && skb->prev != skb->sk->sk_write_queue.next && !test_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags) && !list_empty(&qbackoff_global_list->head)){
@@ -3309,7 +3309,7 @@ exit_1:
             spin_unlock(root_lock);
 		    return NET_XMIT_BACKOFF;
         }
-	}
+	}*/
 
     qbackoff_counter++;
     if(tp){

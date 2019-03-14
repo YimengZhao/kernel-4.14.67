@@ -940,12 +940,13 @@ void qbackoff_add_tasklet(void){
     struct qbackoff_tasklet *qbackoff;
     bool empty;
 
-    spin_lock_irqsave(qbackoff_global_lock, flags);
-    list_splice_init(&qbackoff_global_list->head, &list);
-    spin_unlock_irqrestore(qbackoff_global_lock, flags);
+    //spin_lock_irqsave(qbackoff_global_lock, flags);
+    //list_splice_init(&qbackoff_global_list->head, &list);
+    //spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
     //iterate over every element (tcp_sock) in the global list. If tp is not in the tasklet list, add it to the tasklet list
-    list_for_each_safe(q, n, &list){
+    spin_lock_irqsave(qbackoff_global_lock, flags);
+    list_for_each_safe(q, n, &qbackoff_global_list->head){
         tp = list_entry(q, struct tcp_sock, qbackoff_global_node);
         sk = (struct sock*)tp;
         
@@ -971,16 +972,17 @@ void qbackoff_add_tasklet(void){
        
         //add tp to tasklet list
         if(!tasklet_queued){
-            local_irq_save(flags);
+            //local_irq_save(flags);
             qbackoff = this_cpu_ptr(&qbackoff_tasklet);
             empty = list_empty(&qbackoff->head);
             list_add(&tp->qbackoff_node, &qbackoff->head);
             if(empty)
                 tasklet_schedule(&qbackoff->tasklet);
-            local_irq_restore(flags);
+            //local_irq_restore(flags);
         }
-        break;
+        break; 
     }
+    spin_unlock_irqrestore(qbackoff_global_lock, flags);
 }
 
 /*
