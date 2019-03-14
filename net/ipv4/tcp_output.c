@@ -951,6 +951,7 @@ void qbackoff_add_tasklet(void){
         
         //delete tp from global list
         list_del(&tp->qbackoff_global_node);
+        qbackoff_global_list->len--;
 
         bool tasklet_queued = false;
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
@@ -1005,8 +1006,8 @@ void tcp_wfree(struct sk_buff *skb)
 	 * - chance for incoming ACK (processed by another cpu maybe)
 	 *   to migrate this flow (skb->ooo_okay will be eventually set)
 	 */
-	if (refcount_read(&sk->sk_wmem_alloc) >= SKB_TRUESIZE(1) && this_cpu_ksoftirqd() == current)
-		goto out;
+	/*if (refcount_read(&sk->sk_wmem_alloc) >= SKB_TRUESIZE(1) && this_cpu_ksoftirqd() == current)
+		goto out;*/
 
     /* zym */
     /*if(test_bit(QBACKOFF_STOP, &tp->qbackoff_flags))

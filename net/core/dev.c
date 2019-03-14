@@ -3219,7 +3219,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
             }
 
             //stop the flow. set the QBACKOFF_QUEUED bit
-            nval = (oval & QBACKOFF_STOP_B) | QBACKOFF_GLOBAL_QUEUED_B | QBACKOFF_RELEASE_B;
+            nval = (oval & QBACKOFF_STOP_B) | QBACKOFF_GLOBAL_QUEUED_B ;
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
                         
             if(nval != oval)
@@ -3230,6 +3230,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
        
         //add tp to the global list
         spin_lock_irqsave(qbackoff_global_lock, flags);
+        qbackoff_global_list->len++;
         list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
         spin_unlock_irqrestore(qbackoff_global_lock, flags);
 #if 0
@@ -3261,7 +3262,7 @@ exit:
     if(tp){
         //i++;
         //printk(KERN_DEBUG "set qbackoff_pushed");
-        if(!test_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags) && !list_empty(&qbackoff_global_list->head)){
+        if(skb != skb->sk->sk_write_queue.next && skb->prev != skb->sk->sk_write_queue.next && !test_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags) && !list_empty(&qbackoff_global_list->head)){
             struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
             struct sk_buff *fskb;
             if(fclones){
@@ -3269,7 +3270,7 @@ exit:
                 struct tcp_skb_cb *tcb;
                 tcb = TCP_SKB_CB(fskb);
                 if(tcb)
-                    tcb->qbackoff_skb_pushed++;
+                    tcb->qbackoff_skb_pushed = 1;
             }
 
 
@@ -3285,7 +3286,7 @@ exit:
                 }
 
                 //stop the flow. set the QBACKOFF_QUEUED bit
-                nval = (oval & QBACKOFF_STOP_B) | QBACKOFF_GLOBAL_QUEUED_B | QBACKOFF_RELEASE_B;
+                nval = (oval & QBACKOFF_STOP_B) | QBACKOFF_GLOBAL_QUEUED_B;
                 nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
                         
                 if(nval != oval)
@@ -3297,6 +3298,9 @@ exit:
             //add tp to the global list
             spin_lock_irqsave(qbackoff_global_lock, flags);
             list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+            qbackoff_global_list->len++;
+            if(qbackoff_global_list->len > 7900)
+                printk(KERN_DEBUG "global_queue:%ld", qbackoff_global_list->len);
             spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
 exit_1:   
@@ -3307,7 +3311,7 @@ exit_1:
         }
 	}
 
-
+    qbackoff_counter++;
     if(tp){
         struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
         struct sk_buff *fskb;
