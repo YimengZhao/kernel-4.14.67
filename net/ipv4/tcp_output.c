@@ -810,7 +810,7 @@ void tcp_release_cb(struct sock *sk)
 	unsigned long flags, nflags;
 
     /* zym: deferred from qbackoff_tasklet_func */
-    struct tcp_sock *tp = tcp_sk(sk);
+    /*struct tcp_sock *tp = tcp_sk(sk);
     unsigned long qbackoff_flags, nqbackoff_flags;
     do {
         qbackoff_flags = tp->qbackoff_flags;
@@ -820,7 +820,7 @@ void tcp_release_cb(struct sock *sk)
     }while(cmpxchg(&tp->qbackoff_flags, qbackoff_flags, nqbackoff_flags) != qbackoff_flags);
 
     if(nqbackoff_flags & QBACKOFF_DEFERRED_B)
-        tcp_tsq_handler(sk);
+        tcp_tsq_handler(sk);*/
 
 	/* perform an atomic operation only if at least one flag is set */
 	do {
@@ -955,20 +955,22 @@ void qbackoff_add_tasklet(void){
         tp = list_entry(q, struct tcp_sock, qbackoff_node);
         sk = (struct sock*)tp;
         
+        list_del(&tp->qbackoff_node);
+        //INIT_LIST_HEAD(&tp->qbackoff_node);
         //clear STOP bit: resume tcp
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
             
-            nval = (oval & ~QBACKOFF_STOP_B) | QBACKOFF_DEFERRED_B;
+            nval = oval & ~QBACKOFF_STOP_B & ~QBACKOFF_QUEUED_B;
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
 
             if(nval != oval)
                 continue;
             break;
         }
-        list_del(&tp->qbackoff_node);
+        //list_del(&tp->qbackoff_node);
         //set prev and next pointer of tp->qbackoff_node) to itself. list_empty() should return true after init_list_head.
         //in the qdisc, before push tp to the global list, we use list_empty() to check whether the tp is already in the global list
-        INIT_LIST_HEAD(&(tp->qbackoff_node));
+        //INIT_LIST_HEAD(&(tp->qbackoff_node));
         
         /*
         local_irq_save(flags);
@@ -1007,8 +1009,8 @@ void tcp_wfree(struct sk_buff *skb)
 	 * - chance for incoming ACK (processed by another cpu maybe)
 	 *   to migrate this flow (skb->ooo_okay will be eventually set)
 	 */
-	if (refcount_read(&sk->sk_wmem_alloc) >= SKB_TRUESIZE(1) && this_cpu_ksoftirqd() == current)
-		goto out;
+	/*if (refcount_read(&sk->sk_wmem_alloc) >= SKB_TRUESIZE(1) && this_cpu_ksoftirqd() == current)
+		goto out;*/
 
     /* zym */
     /*if(test_bit(QBACKOFF_STOP, &tp->qbackoff_flags))

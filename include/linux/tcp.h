@@ -395,7 +395,6 @@ enum qbackoff_enum {
     QBACKOFF_QUEUED,
     QBACKOFF_DEFERRED,
     QBACKOFF_STOP,
-    QBACKOFF_NONE,
 };
 
 enum qbackoff_flags {
