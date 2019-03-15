@@ -307,11 +307,11 @@ struct percpu_counter tcp_sockets_allocated;
 EXPORT_SYMBOL(tcp_sockets_allocated);
 
 /* zym */
-struct qbackoff_list *qbackoff_head;
-EXPORT_SYMBOL(qbackoff_head);
+struct qbackoff_list *qbackoff_global_list;
+EXPORT_SYMBOL(qbackoff_global_list);
 
-spinlock_t *qbackoff_lock;
-EXPORT_SYMBOL(qbackoff_lock);
+spinlock_t *qbackoff_global_lock;
+EXPORT_SYMBOL(qbackoff_global_lock);
 
 /*
  * TCP splice context
@@ -424,6 +424,7 @@ void tcp_init_sock(struct sock *sk)
 	INIT_LIST_HEAD(&tp->tsq_node);
 
     INIT_LIST_HEAD(&tp->qbackoff_node);     /* zym */
+    INIT_LIST_HEAD(&tp->qbackoff_global_node);
 
 	icsk->icsk_rto = TCP_TIMEOUT_INIT;
 	tp->mdev_us = jiffies_to_usecs(TCP_TIMEOUT_INIT);

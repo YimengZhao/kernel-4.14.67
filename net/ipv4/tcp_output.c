@@ -810,7 +810,7 @@ void tcp_release_cb(struct sock *sk)
 	unsigned long flags, nflags;
 
     /* zym: deferred from qbackoff_tasklet_func */
-    /*struct tcp_sock *tp = tcp_sk(sk);
+    struct tcp_sock *tp = tcp_sk(sk);
     unsigned long qbackoff_flags, nqbackoff_flags;
     do {
         qbackoff_flags = tp->qbackoff_flags;
@@ -819,8 +819,8 @@ void tcp_release_cb(struct sock *sk)
         nqbackoff_flags = qbackoff_flags & ~QBACKOFF_DEFERRED_B;
     }while(cmpxchg(&tp->qbackoff_flags, qbackoff_flags, nqbackoff_flags) != qbackoff_flags);
 
-    if(nqbackoff_flags & QBACKOFF_DEFERRED_B)
-        tcp_tsq_handler(sk);*/
+    if(qbackoff_flags & QBACKOFF_DEFERRED_B)
+        tcp_tsq_handler(sk);
 
 	/* perform an atomic operation only if at least one flag is set */
 	do {
@@ -883,14 +883,11 @@ static void qbackoff_tasklet_func(unsigned long data)
 
     list_for_each_safe(q, n, &list){
         tp = list_entry(q, struct tcp_sock, qbackoff_node);
-        bh_lock_sock(sk);
         list_del(&tp->qbackoff_node);
-        INIT_LIST_HEAD(&(tp->qbackoff_node));
-        bh_unlock_sock(sk);
 
         sk = (struct sock *)tp;
         smp_mb__before_atomic();
-        clear_bit(QBACKOFF_QUEUED, &tp->qbackoff_flags);
+        clear_bit(QBACKOFF_TASKLET_QUEUED, &tp->qbackoff_flags);
 
         if(!sk->sk_lock.owned &&
            test_bit(QBACKOFF_DEFERRED, &tp->qbackoff_flags)){
@@ -928,12 +925,10 @@ void __init tcp_tasklet_init(void)
 	}
 
     /* zym */
-    qbackoff_head = kmalloc(sizeof(struct qbackoff_list), GFP_KERNEL);
-    INIT_LIST_HEAD(&qbackoff_head->head);
-    if(qbackoff_head)
-        INIT_LIST_HEAD(&qbackoff_head->head);
-    qbackoff_lock = kmalloc(sizeof(spinlock_t), GFP_KERNEL);
-    spin_lock_init(qbackoff_lock);
+    qbackoff_global_list = kmalloc(sizeof(struct qbackoff_list), GFP_KERNEL);
+    INIT_LIST_HEAD(&qbackoff_global_list->head);
+    qbackoff_global_lock = kmalloc(sizeof(spinlock_t), GFP_KERNEL);
+    spin_lock_init(qbackoff_global_lock);
 }
 
 void qbackoff_add_tasklet(void){
@@ -945,22 +940,32 @@ void qbackoff_add_tasklet(void){
     struct qbackoff_tasklet *qbackoff;
     bool empty;
 
+
     //spin_lock_irqsave(qbackoff_lock, flags);
     //list_splice_init(&qbackoff_head->head, &list);
     //spin_unlock_irqrestore(qbackoff_lock, flags);
 
     //iterate over every element (tcp_sock) in the global list. If tp is not in the tasklet list, add it to the tasklet list
-    spin_lock_irqsave(qbackoff_lock, flags);
-    list_for_each_safe(q, n, &qbackoff_head->head){
-        tp = list_entry(q, struct tcp_sock, qbackoff_node);
+    spin_lock_irqsave(qbackoff_global_lock, flags);
+    list_for_each_safe(q, n, &qbackoff_global_list->head){
+        tp = list_entry(q, struct tcp_sock, qbackoff_global_node);
         sk = (struct sock*)tp;
         
-        list_del(&tp->qbackoff_node);
+        list_del(&tp->qbackoff_global_node);
+        
         //INIT_LIST_HEAD(&tp->qbackoff_node);
         //clear STOP bit: resume tcp
+        bool tasklet_queued = false;
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
-            
-            nval = oval & ~QBACKOFF_STOP_B & ~QBACKOFF_QUEUED_B;
+            if(oval & QBACKOFF_TASKLET_QUEUED_B){
+                nval = (oval & ~QBACKOFF_STOP_B & ~QBACKOFF_GLOBAL_QUEUED_B) | QBACKOFF_RELEASE_B;
+                tasklet_queued = true;
+            }
+            else{
+                //nval = (oval & ~QBACKOFF_STOP_B & ~QBACKOFF_GLOBAL_QUEUED_B);
+                nval = (oval & ~QBACKOFF_STOP_B & ~QBACKOFF_GLOBAL_QUEUED_B) | QBACKOFF_TASKLET_QUEUED_B | QBACKOFF_DEFERRED_B | QBACKOFF_RELEASE_B;
+            }
+
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
 
             if(nval != oval)
@@ -972,17 +977,19 @@ void qbackoff_add_tasklet(void){
         //in the qdisc, before push tp to the global list, we use list_empty() to check whether the tp is already in the global list
         //INIT_LIST_HEAD(&(tp->qbackoff_node));
         
-        /*
-        local_irq_save(flags);
-        qbackoff = this_cpu_ptr(&qbackoff_tasklet);
-        empty = list_empty(&qbackoff->head);
-        list_add(&tp->qbackoff_node, &qbackoff->head);
-        if(empty)
-            tasklet_schedule(&qbackoff->tasklet);
-        local_irq_restore(flags);*/
-        //break;
+        if(!tasklet_queued){
+            //local_irq_save(flags);
+            qbackoff = this_cpu_ptr(&qbackoff_tasklet);
+            empty = list_empty(&qbackoff->head);
+            list_add(&tp->qbackoff_node, &qbackoff->head);
+            if(empty)
+                tasklet_schedule(&qbackoff->tasklet);
+            //local_irq_restore(flags);
+        }
+        break;
     }
-    spin_unlock_irqrestore(qbackoff_lock, flags);
+
+    spin_unlock_irqrestore(qbackoff_global_lock, flags);
 }
 
 
@@ -1064,6 +1071,8 @@ void tcp_wfree(struct sk_buff *skb)
     /* zym */
     qbackoff_add_tasklet();
 out:
+     if(test_bit(QBACKOFF_GLOBAL_QUEUED, &tp->qbackoff_flags) || test_bit(QBACKOFF_TASKLET_QUEUED, &tp->qbackoff_flags))
+         return;
 	sk_free(sk);
 }
 

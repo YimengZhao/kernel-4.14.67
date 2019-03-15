@@ -3179,17 +3179,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
     bool mark = false;
     unsigned long flags;
     
-    /* zym: need to free skb here to keep the correct number of reference on the skb */
-    /*if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
-        //i++;
-        //printk(KERN_DEBUG "qdisc:%ld",i);
-		//kfree_skb(skb);
-        qbackoff_free_skb(skb);
-		return NET_XMIT_BACKOFF;
-	}*/
     
-
-
 	qdisc_calculate_pkt_len(skb, q);
 	/*
 	 * Heuristic to force contended enqueues to serialize on a
@@ -3204,11 +3194,11 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	spin_lock(root_lock);
 
     /* zym: check if qdisc is full */
-    if(q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
+    if(tp && q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
         //i++;
         //printk(KERN_DEBUG "qdisc:%ld",i);
         qbackoff_free_skb(skb);
-
+        //refcount_sub_and_test(skb->truesize - 1, &skb->sk->sk_wmem_alloc);
         //if list head is not empty (tp is in either global list or tasklet list), no op
         /*if(!list_empty(&tp->qbackoff_node)){
             goto exit;
@@ -3218,10 +3208,10 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
         //set tp->qbackoff_flags to QBACKOFF_STOP
         unsigned long flags, nval, oval;
         for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
-            if(oval & QBACKOFF_QUEUED_B){
+            if(oval & QBACKOFF_GLOBAL_QUEUED_B){
                 goto exit;
             }
-            nval = oval | QBACKOFF_STOP_B | QBACKOFF_QUEUED_B;
+            nval = oval | QBACKOFF_STOP_B | QBACKOFF_GLOBAL_QUEUED_B;
             nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
                         
             if(nval != oval)
@@ -3230,27 +3220,48 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
         }
        
         //add tp to the global list
-        spin_lock_irqsave(qbackoff_lock, flags);
-        list_add(&tp->qbackoff_node, &qbackoff_head->head);
-        spin_unlock_irqrestore(qbackoff_lock, flags);
+        spin_lock_irqsave(qbackoff_global_lock, flags);
+        list_add(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+        spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
 exit:   if(unlikely(contended))
             spin_unlock(&q->busylock);
         spin_unlock(root_lock);
 		return NET_XMIT_BACKOFF;
 	}
-        
-    /*if(q->q.qlen - qdisc_dev(q)->tx_queue_len < res && q->q.qlen > prev){
-        if(q->q.qlen > prev){
-            mark = true;
-            if(res < 300)
-                res++;
+      
+    if(tp){
+        if(skb != skb->sk->sk_write_queue.next && skb->prev != skb->sk->sk_write_queue.next && !test_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags) && list_empty(&qbackoff_global_list->head)){
+            qbackoff_free_skb(skb);
+            
+            unsigned long flags, nval, oval;
+            for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
+                if(oval & QBACKOFF_GLOBAL_QUEUED_B){
+                    goto exit_1;
+                }
+                nval = oval | QBACKOFF_STOP_B | QBACKOFF_GLOBAL_QUEUED_B;
+                nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
+                        
+                if(nval != oval)
+                    continue;
+                break;
+            }
+       
+            //add tp to the global list
+            spin_lock_irqsave(qbackoff_global_lock, flags);
+            list_add(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+            spin_unlock_irqrestore(qbackoff_global_lock, flags);
+
+exit_1:     if(unlikely(contended))
+                spin_unlock(&q->busylock);
+            spin_unlock(root_lock);
+		    return NET_XMIT_BACKOFF;
+	
         }
-        else{
-            res--;
-        }
+
+        clear_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags);
     }
-    prev = q->q.qlen;*/
+
 
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
 		__qdisc_drop(skb, &to_free);

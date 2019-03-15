@@ -284,8 +284,8 @@ extern unsigned long tcp_memory_pressure;
 struct qbackoff_list {
     struct list_head head;
 };
-extern struct qbackoff_list *qbackoff_head;
-extern spinlock_t *qbackoff_lock;
+extern struct qbackoff_list *qbackoff_global_list;
+extern spinlock_t *qbackoff_global_lock;
 
 /* optimized version of sk_under_memory_pressure() for TCP sockets */
 static inline bool tcp_under_memory_pressure(const struct sock *sk)
