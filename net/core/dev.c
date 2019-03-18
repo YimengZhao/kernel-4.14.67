@@ -3197,12 +3197,19 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
     if(tp && q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
         //i++;
         //printk(KERN_DEBUG "qdisc:%ld",i);
+        struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
+        struct sk_buff *fskb;
+        if(fclones){
+            fskb = &fclones->skb1;
+            struct tcp_skb_cb *tcb;
+            tcb = TCP_SKB_CB(fskb);
+            if(tcb)
+                tcb->qbackoff_skb_pushed=1;
+            //fskb->qbackoff_wmem_delta += skb->truesize;
+        }
+
         qbackoff_free_skb(skb);
         //refcount_sub_and_test(skb->truesize - 1, &skb->sk->sk_wmem_alloc);
-        //if list head is not empty (tp is in either global list or tasklet list), no op
-        /*if(!list_empty(&tp->qbackoff_node)){
-            goto exit;
-        }*/
 
        
         //set tp->qbackoff_flags to QBACKOFF_STOP
@@ -3221,7 +3228,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
        
         //add tp to the global list
         spin_lock_irqsave(qbackoff_global_lock, flags);
-        list_add(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+        list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
         spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
 exit:   if(unlikely(contended))
@@ -3231,7 +3238,8 @@ exit:   if(unlikely(contended))
 	}
       
     if(tp){
-        if(skb != skb->sk->sk_write_queue.next && skb->prev != skb->sk->sk_write_queue.next && !test_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags) && list_empty(&qbackoff_global_list->head)){
+        
+        /*if(skb != skb->sk->sk_write_queue.next && skb->prev != skb->sk->sk_write_queue.next && !test_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags) && !list_empty(&qbackoff_global_list->head)){
             qbackoff_free_skb(skb);
             
             unsigned long flags, nval, oval;
@@ -3249,7 +3257,7 @@ exit:   if(unlikely(contended))
        
             //add tp to the global list
             spin_lock_irqsave(qbackoff_global_lock, flags);
-            list_add(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+            list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
             spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
 exit_1:     if(unlikely(contended))
@@ -3257,9 +3265,21 @@ exit_1:     if(unlikely(contended))
             spin_unlock(root_lock);
 		    return NET_XMIT_BACKOFF;
 	
-        }
+        }*/
 
         clear_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags);
+        struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
+        struct sk_buff *fskb;
+        if(fclones){
+            fskb = &fclones->skb1;
+            struct tcp_skb_cb *tcb;
+            tcb = TCP_SKB_CB(fskb);
+            if(tcb && tcb->qbackoff_skb_pushed == 1){
+                //refcount_sub_and_test(fskb->qbackoff_wmem_delta, &skb->sk->sk_wmem_alloc);
+                //fskb->qbackoff_wmem_delta = 0;
+                tcb->qbackoff_skb_pushed=0;
+            }
+        }
     }
 
 

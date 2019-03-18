@@ -972,11 +972,8 @@ void qbackoff_add_tasklet(void){
                 continue;
             break;
         }
-        //list_del(&tp->qbackoff_node);
-        //set prev and next pointer of tp->qbackoff_node) to itself. list_empty() should return true after init_list_head.
-        //in the qdisc, before push tp to the global list, we use list_empty() to check whether the tp is already in the global list
-        //INIT_LIST_HEAD(&(tp->qbackoff_node));
-        
+       
+        //add to tasklet
         if(!tasklet_queued){
             //local_irq_save(flags);
             qbackoff = this_cpu_ptr(&qbackoff_tasklet);
@@ -986,6 +983,7 @@ void qbackoff_add_tasklet(void){
                 tasklet_schedule(&qbackoff->tasklet);
             //local_irq_restore(flags);
         }
+        //only resume one tcp
         break;
     }
 
@@ -2360,6 +2358,7 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 	unsigned int limit;
 	return false;    /* zym: disable tsq. */ 
     struct tcp_sock *tp = tcp_sk(sk);
+    unsigned long flags;
 
 	limit = max(2 * skb->truesize, sk->sk_pacing_rate >> 10);
 	limit = min_t(u32, limit, sysctl_tcp_limit_output_bytes);
@@ -2376,7 +2375,17 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 			return false;
 
 		//set_bit(TSQ_THROTTLED, &sk->sk_tsq_flags);    /* zym */
-        //set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+        if(test_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags))
+           return false;
+        set_bit(QBACKOFF_STOP, &tp->qbackoff_flags);
+        if(!test_bit(QBACKOFF_GLOBAL_QUEUED, &tp->qbackoff_flags)){
+            set_bit(QBACKOFF_GLOBAL_QUEUED, &tp->qbackoff_flags);
+
+            spin_lock_irqsave(qbackoff_global_lock, flags);
+            list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+            spin_unlock_irqrestore(qbackoff_global_lock, flags);
+            
+        }
 		
         /* It is possible TX completion already happened
 		 * before we set TSQ_THROTTLED, so we must

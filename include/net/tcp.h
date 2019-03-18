@@ -828,7 +828,8 @@ struct tcp_skb_cb {
 	__u8		txstamp_ack:1,	/* Record TX timestamp for ack? */
 			eor:1,		/* Is skb MSG_EOR marked? */
 			has_rxtstamp:1,	/* SKB has a RX timestamp	*/
-			unused:5;
+            qbackoff_skb_pushed:1, /* zym: skb has size has been added to sk-wmem once */
+			unused:4;
 	__u32		ack_seq;	/* Sequence number ACK'd	*/
 	union {
 		struct {
@@ -856,6 +857,7 @@ struct tcp_skb_cb {
 			void *data_end;
 		} bpf;
 	};
+    
 };
 
 #define TCP_SKB_CB(__skb)	((struct tcp_skb_cb *)&((__skb)->cb[0]))
