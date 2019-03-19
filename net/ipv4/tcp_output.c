@@ -1154,6 +1154,7 @@ static void tcp_internal_pacing(struct sock *sk, const struct sk_buff *skb)
  * We are working here with either a clone of the original
  * SKB, or a fresh unique copy made by the retransmit engine.
  */
+int p_counter=0;
 static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 			      int clone_it, gfp_t gfp_mask, u32 rcv_nxt)
 {
@@ -1171,14 +1172,20 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	BUG_ON(!skb || !tcp_skb_pcount(skb));
 	tp = tcp_sk(sk);
 
+    struct sk_buff *fskb = skb;  /* zym */
+
 	if (clone_it) {
 		TCP_SKB_CB(skb)->tx.in_flight = TCP_SKB_CB(skb)->end_seq
 			- tp->snd_una;
 		oskb = skb;
-		if (unlikely(skb_cloned(skb)))
+		if (unlikely(skb_cloned(skb))){
 			skb = pskb_copy(skb, gfp_mask);
-		else
+            p_counter++;
+            printk(KERN_DEBUG "pcounter:%d", p_counter);
+        }
+		else{
 			skb = skb_clone(skb, gfp_mask);
+        }
 		if (unlikely(!skb))
 			return -ENOBUFS;
 	}
@@ -1219,6 +1226,9 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	skb->destructor = skb_is_tcp_pure_ack(skb) ? __sock_wfree : tcp_wfree;
 	skb_set_hash_from_sk(skb, sk);
 	refcount_add(skb->truesize, &sk->sk_wmem_alloc);
+    /* zym */
+    if(tcb->qbackoff_skb_pushed == 0)
+        fskb->qbackoff_wmem_delta = 0;
 
 	skb_set_dst_pending_confirm(skb, sk->sk_dst_pending_confirm);
 
@@ -2356,7 +2366,7 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 				  unsigned int factor)
 {
 	unsigned int limit;
-	return false;    /* zym: disable tsq. */ 
+	//return false;    /* zym: disable tsq. */ 
     struct tcp_sock *tp = tcp_sk(sk);
     unsigned long flags;
 
@@ -3137,6 +3147,7 @@ int tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
  * based retransmit packet might feed us FACK information again.
  * If so, we use it to avoid unnecessarily retransmissions.
  */
+int retrans_queue_counter=0; /* zym */
 void tcp_xmit_retransmit_queue(struct sock *sk)
 {
 	const struct inet_connection_sock *icsk = inet_csk(sk);
@@ -3201,6 +3212,8 @@ void tcp_xmit_retransmit_queue(struct sock *sk)
 
 		if (tcp_retransmit_skb(sk, skb, segs))
 			return;
+        retrans_queue_counter++;
+        //printk(KERN_DEBUG "retrans_queue:%d", retrans_queue_counter); /* zym */
 
 		NET_ADD_STATS(sock_net(sk), mib_idx, tcp_skb_pcount(skb));
 

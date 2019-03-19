@@ -459,6 +459,8 @@ void tcp_retransmit_timer(struct sock *sk)
 		}
 		tcp_enter_loss(sk);
 		tcp_retransmit_skb(sk, tcp_write_queue_head(sk), 1);
+        retrans_timer_counter++;
+        printk(KERN_DEBUG "retrans_timer:%d", retrans_timer_counter);
 		__sk_dst_reset(sk);
 		goto out_reset_timer;
 	}

@@ -3199,13 +3199,19 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
         //printk(KERN_DEBUG "qdisc:%ld",i);
         struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
         struct sk_buff *fskb;
-        if(fclones){
+        if(fclones && skb->fclone == SKB_FCLONE_CLONE){
             fskb = &fclones->skb1;
             struct tcp_skb_cb *tcb;
             tcb = TCP_SKB_CB(fskb);
             if(tcb)
                 tcb->qbackoff_skb_pushed=1;
-            //fskb->qbackoff_wmem_delta += skb->truesize;
+            fskb->qbackoff_wmem_delta += skb->truesize-1;
+        }
+        else{
+            //printk(KERN_DEBUG "not_fclone:%d", skb->fclone);
+            kfree_skb(skb);
+            goto exit;
+           // goto normal_path;
         }
 
         qbackoff_free_skb(skb);
@@ -3274,15 +3280,15 @@ exit_1:     if(unlikely(contended))
             fskb = &fclones->skb1;
             struct tcp_skb_cb *tcb;
             tcb = TCP_SKB_CB(fskb);
-            if(tcb && tcb->qbackoff_skb_pushed == 1){
-                //refcount_sub_and_test(fskb->qbackoff_wmem_delta, &skb->sk->sk_wmem_alloc);
-                //fskb->qbackoff_wmem_delta = 0;
+            if(skb->fclone == SKB_FCLONE_CLONE && tcb && tcb->qbackoff_skb_pushed == 1){
+                refcount_sub_and_test(fskb->qbackoff_wmem_delta, &skb->sk->sk_wmem_alloc);
+                fskb->qbackoff_wmem_delta = 0;
                 tcb->qbackoff_skb_pushed=0;
             }
         }
     }
 
-
+normal_path:
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
 		__qdisc_drop(skb, &to_free);
 		rc = NET_XMIT_DROP;
