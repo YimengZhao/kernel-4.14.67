@@ -3163,9 +3163,8 @@ static void qdisc_pkt_len_init(struct sk_buff *skb)
 	}
 }
 
-long i;
-int prev;
-int res = 100;
+
+long qbackoff_counter=0;
 static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 				 struct net_device *dev,
 				 struct netdev_queue *txq)
@@ -3196,7 +3195,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
     /* zym: check if qdisc is full */
     if(tp && q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
         //i++;
-        //printk(KERN_DEBUG "qdisc:%ld",i);
+        //printk(KERN_DEBUG "qdisc full");
         struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
         struct sk_buff *fskb;
         if(fclones && skb->fclone == SKB_FCLONE_CLONE){
@@ -3235,6 +3234,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
         //add tp to the global list
         spin_lock_irqsave(qbackoff_global_lock, flags);
         list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+        qbackoff_global_list->len++;
         spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
 exit:   if(unlikely(contended))
@@ -3242,10 +3242,31 @@ exit:   if(unlikely(contended))
         spin_unlock(root_lock);
 		return NET_XMIT_BACKOFF;
 	}
-      
+    
+    qbackoff_counter++;
     if(tp){
+        struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
+        struct sk_buff *fskb;
+        if(fclones && skb->fclone == SKB_FCLONE_CLONE){
+            fskb = &fclones->skb1;
+             struct tcp_skb_cb *tcb;
+            tcb = TCP_SKB_CB(fskb);
+            if(tcb && tcb->qbackoff_skb_pushed == 1){
+                refcount_sub_and_test(fskb->qbackoff_wmem_delta, &skb->sk->sk_wmem_alloc);
+                fskb->qbackoff_wmem_delta = 0;
+                tcb->qbackoff_skb_pushed=0;
+                goto normal_path;
+            } 
+        }
+        else{
+           goto normal_path;
+        }
+
+        /*if(fskb != skb->sk->sk_write_queue.next && fskb->prev != skb->sk->sk_write_queue.next  && !list_empty(&qbackoff_global_list->head)){
+            if(qbackoff_counter % 1000 == 0)
+                printk(KERN_DEBUG "middle:%ld, %u", qbackoff_global_list->len,  q->q.qlen);
+            fskb->qbackoff_wmem_delta += skb->truesize-1;
         
-        /*if(skb != skb->sk->sk_write_queue.next && skb->prev != skb->sk->sk_write_queue.next && !test_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags) && !list_empty(&qbackoff_global_list->head)){
             qbackoff_free_skb(skb);
             
             unsigned long flags, nval, oval;
@@ -3264,6 +3285,7 @@ exit:   if(unlikely(contended))
             //add tp to the global list
             spin_lock_irqsave(qbackoff_global_lock, flags);
             list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+            qbackoff_global_list->len++;
             spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
 exit_1:     if(unlikely(contended))
@@ -3274,9 +3296,9 @@ exit_1:     if(unlikely(contended))
         }*/
 
         clear_bit(QBACKOFF_RELEASE, &tp->qbackoff_flags);
-        struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
-        struct sk_buff *fskb;
-        if(fclones){
+        //struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
+        //struct sk_buff *fskb;
+        /*if(fclones){
             fskb = &fclones->skb1;
             struct tcp_skb_cb *tcb;
             tcb = TCP_SKB_CB(fskb);
@@ -3285,10 +3307,14 @@ exit_1:     if(unlikely(contended))
                 fskb->qbackoff_wmem_delta = 0;
                 tcb->qbackoff_skb_pushed=0;
             }
-        }
+        }*/
     }
 
 normal_path:
+    if(qbackoff_counter % 1000 == 0){
+        printk(KERN_DEBUG "after global_queue_len:%ld",qbackoff_global_list->len);
+    }
+
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
 		__qdisc_drop(skb, &to_free);
 		rc = NET_XMIT_DROP;

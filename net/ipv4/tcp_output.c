@@ -743,11 +743,11 @@ static void tcp_tsq_handler(struct sock *sk)
 	     TCPF_CLOSE_WAIT  | TCPF_LAST_ACK)) {
 		struct tcp_sock *tp = tcp_sk(sk);
 
-		/*if (tp->lost_out > tp->retrans_out &&
+		if (tp->lost_out > tp->retrans_out &&
 		    tp->snd_cwnd > tcp_packets_in_flight(tp)) {
 			tcp_mstamp_refresh(tp);
 			tcp_xmit_retransmit_queue(sk);
-		}*/
+		}
 
 		tcp_write_xmit(sk, tcp_current_mss(sk), tp->nonagle,
 			       0, GFP_ATOMIC);
@@ -952,6 +952,7 @@ void qbackoff_add_tasklet(void){
         sk = (struct sock*)tp;
         
         list_del(&tp->qbackoff_global_node);
+        qbackoff_global_list->len--;
         
         //INIT_LIST_HEAD(&tp->qbackoff_node);
         //clear STOP bit: resume tcp
@@ -2366,11 +2367,11 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 				  unsigned int factor)
 {
 	unsigned int limit;
-	//return false;    /* zym: disable tsq. */ 
+	return false;    /* zym: disable tsq. */ 
     struct tcp_sock *tp = tcp_sk(sk);
     unsigned long flags;
 
-	limit = max(5 * skb->truesize, sk->sk_pacing_rate >> 10);
+	limit = max(2 * skb->truesize, sk->sk_pacing_rate >> 10);
 	limit = min_t(u32, limit, sysctl_tcp_limit_output_bytes);
 	limit <<= factor;
 
@@ -2392,7 +2393,9 @@ static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
             set_bit(QBACKOFF_GLOBAL_QUEUED, &tp->qbackoff_flags);
 
             spin_lock_irqsave(qbackoff_global_lock, flags);
+            refcount_add(1, &sk->sk_wmem_alloc);
             list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+            qbackoff_global_list->len++;
             spin_unlock_irqrestore(qbackoff_global_lock, flags);
             
         }

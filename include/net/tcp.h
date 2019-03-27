@@ -283,6 +283,7 @@ extern unsigned long tcp_memory_pressure;
 /* zym */
 struct qbackoff_list {
     struct list_head head;
+    long len;
 };
 extern struct qbackoff_list *qbackoff_global_list;
 extern spinlock_t *qbackoff_global_lock;
