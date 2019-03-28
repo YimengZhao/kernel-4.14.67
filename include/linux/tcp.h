@@ -368,6 +368,7 @@ struct tcp_sock {
     struct list_head qbackoff_node;
     struct list_head qbackoff_global_node;
     unsigned long qbackoff_flags;
+    unsigned long qbackoff_pktcount;
 };
 
 enum tsq_enum {
