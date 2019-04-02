@@ -3198,6 +3198,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
         //printk(KERN_DEBUG "qdisc full");
         struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
         struct sk_buff *fskb;
+        //if it is a data packet (SKB_FCLONE_CLONE is set to 1), mark qbackoff_skb_pushed to 1 (meaning it has been pushed back by qdisc) and store the skb size
         if(fclones && skb->fclone == SKB_FCLONE_CLONE){
             fskb = &fclones->skb1;
             struct tcp_skb_cb *tcb;
@@ -3207,15 +3208,12 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
             fskb->qbackoff_wmem_delta += skb->truesize-1;
         }
         else{
-            //printk(KERN_DEBUG "not_fclone:%d", skb->fclone);
+            //if it is an ack, just free it
             kfree_skb(skb);
             goto exit;
-            //goto normal_path;
         }
 
         qbackoff_free_skb(skb);
-        //refcount_sub_and_test(skb->truesize - 1, &skb->sk->sk_wmem_alloc);
-
        
         //set tp->qbackoff_flags to QBACKOFF_STOP
         unsigned long flags, nval, oval;
@@ -3248,11 +3246,13 @@ exit:   if(unlikely(contended))
     if(tp){
         struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
         struct sk_buff *fskb;
+        //We only process the data packet here (ack packet do not need to go through the check here). if SKB_FCLONE_CLONE is set, the skb is a data packet. 
         if(fclones && skb->fclone == SKB_FCLONE_CLONE){
             fskb = &fclones->skb1;
             struct tcp_skb_cb *tcb;
             tcb = TCP_SKB_CB(fskb);
-            //tp->qbackoff_pktcount++;
+            
+            //if the packet is just released from the global list, pass the packet to qdisc
             if(tcb && tcb->qbackoff_skb_pushed == 1){
                 refcount_sub_and_test(fskb->qbackoff_wmem_delta, &skb->sk->sk_wmem_alloc);
                 fskb->qbackoff_wmem_delta = 0;
@@ -3261,18 +3261,29 @@ exit:   if(unlikely(contended))
                 goto normal_path;
             } 
             
+            //if the socket has been released from the global list but has sent less than 2 packets, pass the packet to qdisc. 
             if(tp->qbackoff_pktcount < 2){
                 tp->qbackoff_pktcount++;
+                goto normal_path;
             }
             else{
-                tp->qbackoff_pktcount = 0;
+                //tp->qbackoff_pktcount = 0;
 
-                if(fskb != skb->sk->sk_write_queue.next && fskb->prev != skb->sk->sk_write_queue.next  && !list_empty(&qbackoff_global_list->head)){
+                //if the flow has sent two packets and the global list is not empty (meaning that there are sockets wait to be resumed, stopped this socket and put it into the global list
+                if(!list_empty(&qbackoff_global_list->head)){
+                    //always let the first and the second packets of a flow to pass
+                    if(fskb != skb->sk->sk_write_queue.next && fskb->prev != skb->sk->sk_write_queue.next){
+                        tp->qbackoff_pktcount++;
+                        goto normal_path;
+                    }
+
                     if(qbackoff_counter % 1000 == 0)
+                        //printk(KERN_DEBUG "test");
                         //printk(KERN_DEBUG "middle:%ld, %u", qbackoff_global_list->len,  q->q.qlen);
+                    
                     fskb->qbackoff_wmem_delta += skb->truesize-1;
                     tcb->qbackoff_skb_pushed = 1;
-        
+                    tp->qbackoff_pktcount = 0;    
                     qbackoff_free_skb(skb);
             
                     unsigned long flags, nval, oval;
