@@ -3163,6 +3163,29 @@ static void qdisc_pkt_len_init(struct sk_buff *skb)
 	}
 }
 
+/* zym */
+struct tbf_sched_data {
+    /* Parameters */
+    u32 limit;       /* Maximal length of backlog: bytes */
+    u32 max_size;
+    s64 buffer;      /* Token bucket depth/rate: MUST BE >= MTU/B */
+    s64 mtu;
+    struct psched_ratecfg rate;
+    struct psched_ratecfg peak;
+
+    /* Variables */
+    s64 tokens;            /* Current number of B tokens */
+    s64 ptokens;       /* Current number of P tokens */
+    s64 t_c;           /* Time check-point */
+    struct Qdisc *qdisc;     /* Inner qdisc, default - bfifo queue */
+    struct qdisc_watchdog watchdog; /* Watchdog timer */
+};
+
+static unsigned int skb_gso_mac_seglen(const struct sk_buff *skb)
+{
+    unsigned int hdr_len = skb_transport_header(skb) - skb_mac_header(skb);
+    return hdr_len + skb_gso_transport_seglen(skb);
+}
 
 long qbackoff_counter=0;
 static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
@@ -3193,52 +3216,59 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	spin_lock(root_lock);
 
     /* zym: check if qdisc is full */
-    if(tp && q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
-        //i++;
-        //printk(KERN_DEBUG "qdisc full");
-        struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
-        struct sk_buff *fskb;
-        //if it is a data packet (SKB_FCLONE_CLONE is set to 1), mark qbackoff_skb_pushed to 1 (meaning it has been pushed back by qdisc) and store the skb size
-        if(fclones && skb->fclone == SKB_FCLONE_CLONE){
-            fskb = &fclones->skb1;
-            struct tcp_skb_cb *tcb;
-            tcb = TCP_SKB_CB(fskb);
-            if(tcb)
-                tcb->qbackoff_skb_pushed=1;
-            fskb->qbackoff_wmem_delta += skb->truesize-1;
-        }
-        else{
-            //if it is an ack, just free it
-            kfree_skb(skb);
-            goto exit;
-        }
+    struct tbf_sched_data *tbf_q = qdisc_priv(q);
+    if(tp && tbf_q->qdisc){
+        struct Qdisc *bfifo = tbf_q->qdisc;
 
-        qbackoff_free_skb(skb);
-       
-        //set tp->qbackoff_flags to QBACKOFF_STOP
-        unsigned long flags, nval, oval;
-        for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
-            if(oval & QBACKOFF_GLOBAL_QUEUED_B){
+        if((bfifo->qstats.backlog + qdisc_pkt_len(skb) > bfifo->limit) || (qdisc_pkt_len(skb) > tbf_q->max_size && !(skb_is_gso(skb) && skb_gso_mac_seglen(skb) <= tbf_q->max_size))){
+                
+            //if(tp && q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
+            //i++;
+            //printk(KERN_DEBUG "qdisc full");
+            struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
+            struct sk_buff *fskb;
+            //if it is a data packet (SKB_FCLONE_CLONE is set to 1), mark qbackoff_skb_pushed to 1 (meaning it has been pushed back by qdisc) and store the skb size
+            if(fclones && skb->fclone == SKB_FCLONE_CLONE){
+                fskb = &fclones->skb1;
+                struct tcp_skb_cb *tcb;
+                tcb = TCP_SKB_CB(fskb);
+                if(tcb)
+                    tcb->qbackoff_skb_pushed=1;
+                fskb->qbackoff_wmem_delta += skb->truesize-1;
+            }
+            else{
+                //if it is an ack, just free it
+                kfree_skb(skb);
                 goto exit;
             }
-            nval = oval | QBACKOFF_STOP_B | QBACKOFF_GLOBAL_QUEUED_B;
-            nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
-                        
-            if(nval != oval)
-                continue;
-            break;
-        }
-       
-        //add tp to the global list
-        spin_lock_irqsave(qbackoff_global_lock, flags);
-        list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
-        qbackoff_global_list->len++;
-        spin_unlock_irqrestore(qbackoff_global_lock, flags);
 
-exit:   if(unlikely(contended))
-            spin_unlock(&q->busylock);
-        spin_unlock(root_lock);
-		return NET_XMIT_BACKOFF;
+            qbackoff_free_skb(skb);
+           
+            //set tp->qbackoff_flags to QBACKOFF_STOP
+            unsigned long flags, nval, oval;
+            for(oval = READ_ONCE(tp->qbackoff_flags);; oval = nval){
+                if(oval & QBACKOFF_GLOBAL_QUEUED_B){
+                    goto exit;
+                }
+                nval = oval | QBACKOFF_STOP_B | QBACKOFF_GLOBAL_QUEUED_B;
+                nval = cmpxchg(&tp->qbackoff_flags, oval, nval);
+                            
+                if(nval != oval)
+                    continue;
+                break;
+            }
+           
+            //add tp to the global list
+            spin_lock_irqsave(qbackoff_global_lock, flags);
+            list_add_tail(&tp->qbackoff_global_node, &qbackoff_global_list->head);
+            qbackoff_global_list->len++;
+            spin_unlock_irqrestore(qbackoff_global_lock, flags);
+
+    exit:   if(unlikely(contended))
+                spin_unlock(&q->busylock);
+            spin_unlock(root_lock);
+            return NET_XMIT_BACKOFF;
+        }
 	}
     
     qbackoff_counter++;
