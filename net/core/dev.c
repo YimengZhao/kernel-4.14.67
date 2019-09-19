@@ -2998,9 +2998,7 @@ struct sk_buff *dev_hard_start_xmit(struct sk_buff *first, struct net_device *de
 	struct sk_buff *skb = first;
 	int rc = NETDEV_TX_OK;
 
-    int i = 0;
 	while (skb) {
-        i++;
 		struct sk_buff *next = skb->next;
 
 		skb->next = NULL;
@@ -3164,7 +3162,6 @@ static void qdisc_pkt_len_init(struct sk_buff *skb)
 }
 
 
-long qbackoff_counter=0;
 static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 				 struct net_device *dev,
 				 struct netdev_queue *txq)
@@ -3175,7 +3172,6 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	int rc;
     struct tcp_sock *tp = tcp_sk(skb->sk);
 
-    bool mark = false;
     unsigned long flags;
     
     
@@ -3194,8 +3190,6 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
     /* zym: check if qdisc is full */
     if(tp && q->q.qlen  >= qdisc_dev(q)->tx_queue_len){
-        //i++;
-        //printk(KERN_DEBUG "qdisc full");
         struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
         struct sk_buff *fskb;
         //if it is a data packet (SKB_FCLONE_CLONE is set to 1), mark qbackoff_skb_pushed to 1 (meaning it has been pushed back by qdisc) and store the skb size
@@ -3241,7 +3235,6 @@ exit:   if(unlikely(contended))
 		return NET_XMIT_BACKOFF;
 	}
     
-    qbackoff_counter++;
     //logic to ensure fairness
     if(tp){
         struct sk_buff_fclones *fclones = container_of(skb, struct sk_buff_fclones, skb2);
@@ -3267,8 +3260,6 @@ exit:   if(unlikely(contended))
                 goto normal_path;
             }
             else{
-                //tp->qbackoff_pktcount = 0;
-
                 //if the flow has sent two packets and the global list is not empty (meaning that there are sockets wait to be resumed, stopped this socket and put it into the global list
                 if(!list_empty(&qbackoff_global_list->head)){
                     //always let the first and the second packets of a flow to pass
@@ -3276,10 +3267,6 @@ exit:   if(unlikely(contended))
                         tp->qbackoff_pktcount++;
                         goto normal_path;
                     }
-
-                    if(qbackoff_counter % 1000 == 0)
-                        //printk(KERN_DEBUG "test");
-                        //printk(KERN_DEBUG "middle:%ld, %u", qbackoff_global_list->len,  q->q.qlen);
                     
                     fskb->qbackoff_wmem_delta += skb->truesize-1;
                     tcb->qbackoff_skb_pushed = 1;
@@ -3319,9 +3306,6 @@ exit_1:
    }
 
 normal_path:
-    if(qbackoff_counter % 1000 == 0){
-        //printk(KERN_DEBUG "after global_queue_len:%ld",qbackoff_global_list->len);
-    }
 
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
 		__qdisc_drop(skb, &to_free);
@@ -3362,8 +3346,6 @@ normal_path:
 	if (unlikely(contended))
 		spin_unlock(&q->busylock);
 
-    if(mark)
-        rc = 100;
 	return rc;
 }
 

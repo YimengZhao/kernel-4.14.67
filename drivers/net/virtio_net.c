@@ -1261,7 +1261,7 @@ static int xmit_skb(struct send_queue *sq, struct sk_buff *skb)
 	}
 	return virtqueue_add_outbuf(sq->vq, sq->sg, num_sg, skb, GFP_ATOMIC);
 }
-int ii;
+
 static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct virtnet_info *vi = netdev_priv(dev);
@@ -1312,10 +1312,6 @@ static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
 	 * early means 16 slots are typically wasted.
 	 */
 	if (sq->vq->num_free < 2+MAX_SKB_FRAGS) {
-        /*pr_debug("stest");
-        ii++;
-        if(ii % 1000 == 0)
-            printk(KERN_ALERT "DEBUG: stop_queue %d", ii);*/ 
 		netif_stop_subqueue(dev, qnum);
 		if (!use_napi &&
 		    unlikely(!virtqueue_enable_cb_delayed(sq->vq))) {
