@@ -1957,7 +1957,6 @@ static inline s64 tcp_rto_delta_us(const struct sock *sk)
 	const struct sk_buff *skb = tcp_write_queue_head(sk);
 	u32 rto = inet_csk(sk)->icsk_rto;
 	u64 rto_time_stamp_us = skb->skb_mstamp + jiffies_to_usecs(rto);
-    //u64 rto_time_stamp_us = tcp_sk(sk)->tcp_mstamp + jiffies_to_usecs(rto);
 
 	return rto_time_stamp_us - tcp_sk(sk)->tcp_mstamp;
 }
